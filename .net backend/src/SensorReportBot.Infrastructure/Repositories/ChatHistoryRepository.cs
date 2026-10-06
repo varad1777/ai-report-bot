@@ -102,6 +102,19 @@ public class ChatHistoryRepository : IChatHistoryRepository
         return results.ToList();
     }
 
+    public async Task<string?> GetLatestAssistantMetadataAsync(string sessionId, CancellationToken ct = default)
+    {
+        await EnsureTableExistsAsync(ct);
+        using var conn = CreateConnection();
+        const string sql = @"
+            SELECT metadata
+            FROM chat_messages
+            WHERE session_id = @SessionId AND role = 'assistant' AND metadata IS NOT NULL
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1;";
+        return await conn.QueryFirstOrDefaultAsync<string?>(sql, new { SessionId = sessionId });
+    }
+
     public async Task ClearHistoryAsync(string sessionId, CancellationToken ct = default)
     {
         await EnsureTableExistsAsync(ct);

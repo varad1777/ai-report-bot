@@ -1,5 +1,6 @@
 namespace SensorReportBot.Infrastructure;
 
+using System;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using SensorReportBot.Application.Interfaces;
@@ -11,18 +12,18 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
-        // Bind LLM and RabbitMQ configuration sections
+        // Bind LLM configuration section
         services.Configure<LlmOptions>(configuration.GetSection(LlmOptions.SectionName));
-        services.Configure<RabbitMqOptions>(configuration.GetSection(RabbitMqOptions.SectionName));
 
         // Register HttpClient for LLM Service
-        services.AddHttpClient<ILlmService, LlmService>();
+        services.AddHttpClient<ILlmService, LlmService>((sp, client) =>
+        {
+            var llm = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<LlmOptions>>().Value;
+            client.Timeout = TimeSpan.FromSeconds(Math.Max(5, llm.TimeoutSeconds));
+        });
 
         // System prompt provider (reads system prompts from Prompts/ directory)
         services.AddSingleton<IPromptProvider, FilePromptProvider>();
-
-        // Primary Guard service (pure LLM/SLM classifier using structured JSON output)
-
 
         // TimescaleDB Telemetry Repository
         services.AddScoped<ITelemetryRepository, TelemetryRepository>();
@@ -34,8 +35,8 @@ public static class DependencyInjection
         // QuestPDF Report Service
         services.AddSingleton<IPdfReportService, QuestPdfReportService>();
 
-        // PDF Generation Asynchronous RabbitMQ Job Queue & Background Service
-        services.AddSingleton<IPdfJobQueue, RabbitMqPdfJobQueue>();
+        // PDF Generation Asynchronous In-Memory Job Queue & Background Service
+        services.AddSingleton<IPdfJobQueue, InMemoryPdfJobQueue>();
         services.AddHostedService<PdfGenerationBackgroundService>();
 
         return services;

@@ -3,14 +3,22 @@ namespace SensorReportBot.Application.Steps;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.Json;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using SensorReportBot.Application.Chat;
 using SensorReportBot.Application.DTOs;
+using SensorReportBot.Application.Exceptions;
 using SensorReportBot.Application.Interfaces;
 using SensorReportBot.Domain.Entities;
 
+/// <summary>
+/// The "brain" of the pipeline: ONE LLM call per user message. The model authors the reply and
+/// extracts the report parameters; the server then syncs those parameters with the database
+/// (<see cref="ChatResponseSynchronizer"/>) and fills the UI chips. No regex fast-paths, no canned
+/// replies: if the model cannot answer, an <see cref="LlmUnavailableException"/> is raised.
+/// </summary>
 public class IntentExtractionStep : IChatStep
 {
     private readonly ILlmService _llmService;
@@ -32,94 +40,79 @@ public class IntentExtractionStep : IChatStep
 
     public async Task RunAsync(ChatRequestState state, CancellationToken ct)
     {
+        var assets = await _telemetryRepo.GetAssetsAsync(ct);
+        string systemPrompt = await BuildSystemPromptAsync(assets, ct);
+
+        var (reply, turn) = await AskAsync(state, systemPrompt, assets, note: null, ct);
+
+        // One corrective retry when the model invented an asset / gave an unusable timeframe /
+        // returned no text. The retry reply is again written by the model.
+        string? problem = string.IsNullOrWhiteSpace(reply?.ReplyMessage)
+            ? "replyMessage was empty. Write a helpful reply."
+            : turn?.Problem;
+
+        if (problem != null)
+        {
+            _logger.LogInformation("Retrying LLM call once. Problem: {Problem}", problem);
+            var (retryReply, retryTurn) = await AskAsync(state, systemPrompt, assets, problem, ct);
+            if (!string.IsNullOrWhiteSpace(retryReply?.ReplyMessage))
+            {
+                reply = retryReply;
+                turn = retryTurn;
+            }
+        }
+
+        if (reply == null || turn == null || string.IsNullOrWhiteSpace(reply.ReplyMessage))
+            throw new LlmUnavailableException("The language model did not return a usable reply.");
+
+        state.Reply = reply.ReplyMessage.Trim();
+        state.IsOnTopic = turn.IsOnTopic;
+        state.IsComplete = turn.IsComplete;
+        state.SuggestedAction = turn.SuggestedAction;
+        state.SuggestedOptions = turn.SuggestedOptions.ToList();
+        state.ExtractedParameters = turn.Parameters;
+    }
+
+    private async Task<(LlmChatReplyDto? Reply, SyncedTurn? Turn)> AskAsync(
+        ChatRequestState state,
+        string systemPrompt,
+        IReadOnlyList<AssetDto> assets,
+        string? note,
+        CancellationToken ct)
+    {
+        string userPrompt = PromptContextBuilder.Build(
+            state.UserMessage, state.PreviousParameters, state.History, DateTime.UtcNow, note);
+
+        LlmChatReplyDto? reply;
         try
         {
-            // 1. Fetch available database catalog (Assets) - format compactly to save tokens
-            var assets = await _telemetryRepo.GetAssetsAsync(ct);
-            string availableAssetsJson = string.Join(" | ", assets.Select(a => $"{a.AssetId}: {a.Name}"));
-
-            // 2. Build history context
-            string historyContext = state.History != null && state.History.Any()
-                ? string.Join("\n", state.History.Select(h => $"{h.Role.ToUpper()}: {h.Content}"))
-                : "No prior history.";
-
-            // 3. Load & format Extractor System Prompt (Static - cached in Ollama KV memory)
-            string currentTimeStr = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss 'UTC'");
-            string systemPromptTemplate = await _promptProvider.GetPromptAsync("ExtractorPrompt", ct);
-            string systemPrompt = systemPromptTemplate
-                .Replace("{AvailableAssetsJson}", availableAssetsJson);
-
-            string userContextMessage = $"[CURRENT UTC TIME]: {currentTimeStr}\n\n[CONVERSATION HISTORY]:\n{historyContext}\n\n[LATEST USER INPUT]:\n{state.UserMessage}";
-
-            // 4. Execute LLM Intent & Reply Generation
-            var result = await _llmService.GenerateJsonResponseAsync<ConversationalChatResultDto>(systemPrompt, userContextMessage, ct);
-
-            if (result != null)
-            {
-                state.IsOnTopic = result.IsOnTopic;
-                state.IsComplete = result.IsComplete;
-                state.ExtractedParameters = result.ExtractedParameters ?? new ExtractedReportParametersDto();
-                state.Reply = result.ReplyMessage;
-                state.SuggestedAction = result.SuggestedAction;
-                state.SuggestedOptions = result.SuggestedOptions;
-
-                // If off-topic, ensure reply is set and exit early
-                if (!result.IsOnTopic)
-                {
-                    if (string.IsNullOrWhiteSpace(state.Reply))
-                        state.Reply = "Sorry, I can only help with industrial sensor and asset reports.";
-                    return;
-                }
-
-                // 1. Resolve AssetId from database if LLM extracted AssetName
-                if (!string.IsNullOrWhiteSpace(state.ExtractedParameters.AssetName) && (!state.ExtractedParameters.AssetId.HasValue || state.ExtractedParameters.AssetId == 0))
-                {
-                    var matchedAsset = assets.FirstOrDefault(a => 
-                        a.Name.Equals(state.ExtractedParameters.AssetName, StringComparison.OrdinalIgnoreCase) ||
-                        a.Name.Contains(state.ExtractedParameters.AssetName, StringComparison.OrdinalIgnoreCase) ||
-                        state.ExtractedParameters.AssetName.Contains(a.Name, StringComparison.OrdinalIgnoreCase));
-
-                    if (matchedAsset != null)
-                    {
-                        state.ExtractedParameters.AssetId = matchedAsset.AssetId;
-                        state.ExtractedParameters.AssetName = matchedAsset.Name;
-                    }
-                }
-
-                // 2. Dynamic options enrichment from database for asset selection
-                if (state.SuggestedAction == "select_asset")
-                {
-                    state.SuggestedOptions = assets.Select(a => a.Name).ToList();
-                }
-
-                // 3. Ensure isComplete is synchronized when configuration is ready or action is confirm_queue
-                if (state.SuggestedAction == "confirm_queue" || 
-                    (state.ExtractedParameters.AssetId.HasValue && state.ExtractedParameters.AssetId > 0 &&
-                     (!string.IsNullOrWhiteSpace(state.ExtractedParameters.TimeRange) || !string.IsNullOrWhiteSpace(state.ExtractedParameters.FromDate))))
-                {
-                    state.IsComplete = true;
-                    if (string.IsNullOrWhiteSpace(state.SuggestedAction) || state.SuggestedAction == "none")
-                    {
-                        state.SuggestedAction = "confirm_queue";
-                    }
-                }
-            }
-            else
-            {
-                // Graceful fallback only if LLM API request completely fails
-                state.IsOnTopic = true;
-                state.IsComplete = false;
-                state.Reply = "Hi there! I'm your Sensor Report Assistant. Which machine or asset would you like a report for?";
-                state.SuggestedAction = "select_asset";
-                state.SuggestedOptions = assets.Select(a => a.Name).ToList();
-            }
+            reply = await _llmService.GenerateJsonResponseAsync<LlmChatReplyDto>(
+                systemPrompt, userPrompt, ct, ChatReplySchema.Value);
         }
-        catch (Exception ex)
+        catch (HttpRequestException ex)
         {
-            _logger.LogError(ex, "Failed to execute LLM intent extraction call in IntentExtractionStep");
-            // Keep IsOnTopic = true so the conversation isn't killed; surface a neutral retry message
-            state.IsOnTopic = true;
-            state.Reply = "I'm having trouble processing your request right now. Could you please try again?";
+            throw new LlmUnavailableException("The language model endpoint is not reachable.", ex);
         }
+        catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            throw new LlmUnavailableException("The language model timed out.", ex);
+        }
+
+        if (reply == null) return (null, null);
+        return (reply, ChatResponseSynchronizer.Sync(reply, state.PreviousParameters, assets));
+    }
+
+    /// <summary>
+    /// Static rules + asset catalog. Kept identical between requests so Ollama / llama.cpp can reuse
+    /// the cached KV prefix instead of re-processing it on every message.
+    /// </summary>
+    private async Task<string> BuildSystemPromptAsync(IReadOnlyList<AssetDto> assets, CancellationToken ct)
+    {
+        string template = await _promptProvider.GetPromptAsync("ExtractorPrompt", ct);
+        string catalog = assets.Count == 0
+            ? "(none)"
+            : string.Join(" | ", assets.Select(a => $"{a.AssetId}: {a.Name}"));
+
+        return template.Replace("{AssetCatalog}", catalog);
     }
 }

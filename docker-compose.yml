@@ -73,28 +73,7 @@ services:
     ports:
       - "8080:8080"
 
-  # ---------------- RabbitMQ Message Broker ----------------
-  rabbitmq:
-    image: rabbitmq:3-management-alpine
-    container_name: sensorbot_rabbitmq
-    restart: unless-stopped
-    ports:
-      - "5672:5672"   # AMQP protocol
-      - "15672:15672" # Management Web Dashboard UI
-    environment:
-      RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
 volumes:
   ollama_data:
     driver: local
   pgdata:
-  rabbitmq_data:
-    driver: local

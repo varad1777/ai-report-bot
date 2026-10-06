@@ -150,21 +150,33 @@ public class InMemoryPdfJobQueue : IPdfJobQueue
         return Task.FromResult(false);
     }
 
-    public Task<byte[]?> GetJobPdfAsync(Guid jobId)
+    public async Task<byte[]?> GetJobPdfAsync(Guid jobId)
     {
         if (_jobs.TryGetValue(jobId, out var job))
         {
-            return Task.FromResult(job.PdfData);
+            if (job.PdfData != null) return job.PdfData;
+            if (!string.IsNullOrEmpty(job.FilePath) && System.IO.File.Exists(job.FilePath))
+            {
+                return await System.IO.File.ReadAllBytesAsync(job.FilePath);
+            }
         }
-        return Task.FromResult<byte[]?>(null);
+        return null;
     }
 
     public Task<System.IO.Stream?> GetJobPdfStreamAsync(Guid jobId)
     {
-        if (_jobs.TryGetValue(jobId, out var job) && job.PdfData != null)
+        if (_jobs.TryGetValue(jobId, out var job))
         {
-            System.IO.Stream stream = new System.IO.MemoryStream(job.PdfData);
-            return Task.FromResult<System.IO.Stream?>(stream);
+            if (job.PdfData != null)
+            {
+                System.IO.Stream stream = new System.IO.MemoryStream(job.PdfData);
+                return Task.FromResult<System.IO.Stream?>(stream);
+            }
+            if (!string.IsNullOrEmpty(job.FilePath) && System.IO.File.Exists(job.FilePath))
+            {
+                System.IO.Stream stream = new System.IO.FileStream(job.FilePath, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.Read);
+                return Task.FromResult<System.IO.Stream?>(stream);
+            }
         }
         return Task.FromResult<System.IO.Stream?>(null);
     }

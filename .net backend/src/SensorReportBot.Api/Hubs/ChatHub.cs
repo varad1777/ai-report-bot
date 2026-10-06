@@ -4,6 +4,7 @@ using System;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
+using SensorReportBot.Application.Exceptions;
 using SensorReportBot.Application.Interfaces;
 
 public class ChatHub : Hub
@@ -28,6 +29,11 @@ public class ChatHub : Hub
             // Push the response back over WebSocket to the client who sent the message.
             // "ReceiveChatResponse" must match the connection.on(...) listener in React.
             await Clients.Caller.SendAsync("ReceiveChatResponse", result);
+        }
+        catch (LlmUnavailableException ex)
+        {
+            _logger.LogWarning(ex, "LLM unavailable for session {SessionId}", sessionId);
+            await Clients.Caller.SendAsync("ReceiveError", ex.Message);
         }
         catch (Exception ex)
         {

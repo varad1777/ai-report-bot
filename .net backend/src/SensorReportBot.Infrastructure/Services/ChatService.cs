@@ -29,14 +29,7 @@ public class ChatService : IChatService
     public async Task<ConversationalChatResultDto> ProcessChatMessageAsync(string sessionId, string userMessage, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(userMessage))
-        {
-            return new ConversationalChatResultDto
-            {
-                IsOnTopic = false,
-                IsComplete = false,
-                ReplyMessage = "Please provide a valid question or request regarding sensor reports."
-            };
-        }
+            throw new ArgumentException("Message must not be empty.", nameof(userMessage));
 
         var state = new ChatRequestState
         {
@@ -46,29 +39,24 @@ public class ChatService : IChatService
 
         try
         {
-            // Execute full ChatWorkflow Pipeline (GuardStep -> SaveUserMessageStep -> LoadHistoryStep -> IntentExtractionStep -> PersistAssistantReplyStep)
+            // LoadHistoryStep -> IntentExtractionStep (single LLM call) -> SaveUserMessageStep -> PersistAssistantReplyStep
             await _chatWorkflow.ExecuteAsync(state, ct);
-
-            return new ConversationalChatResultDto
-            {
-                IsOnTopic = state.IsOnTopic,
-                IsComplete = state.IsComplete,
-                ReplyMessage = state.Reply ?? "I can help with your sensor report. Which asset and timeframe would you like?",
-                ExtractedParameters = state.ExtractedParameters,
-                SuggestedAction = state.SuggestedAction,
-                SuggestedOptions = state.SuggestedOptions
-            };
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error processing ChatWorkflow pipeline for session {SessionId}", sessionId);
+            // No canned chatbot answer: let the caller (SignalR hub) report the failure.
+            _logger.LogError(ex, "Chat pipeline failed for session {SessionId}", sessionId);
+            throw;
         }
 
         return new ConversationalChatResultDto
         {
-            IsOnTopic = false,
-            IsComplete = false,
-            ReplyMessage = "I encountered an issue processing your prompt. Please ask about sensor reports or specify target asset parameters."
+            IsOnTopic = state.IsOnTopic,
+            IsComplete = state.IsComplete,
+            ReplyMessage = state.Reply!, // guaranteed by IntentExtractionStep (it throws otherwise)
+            ExtractedParameters = state.ExtractedParameters,
+            SuggestedAction = state.SuggestedAction,
+            SuggestedOptions = state.SuggestedOptions
         };
     }
 

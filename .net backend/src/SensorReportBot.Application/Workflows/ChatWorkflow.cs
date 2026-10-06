@@ -15,17 +15,15 @@ public class ChatWorkflow
         _steps = steps;
     }
 
+    /// <summary>
+    /// Runs the steps in registration order. There is intentionally no fallback reply: every
+    /// reply comes from the LLM, and a step that cannot get one throws.
+    /// </summary>
     public async Task ExecuteAsync(ChatRequestState state, CancellationToken ct = default)
     {
         foreach (var step in _steps)
         {
             await step.RunAsync(state, ct);
-        }
-
-        if (state.IsOnTopic && string.IsNullOrEmpty(state.Reply))
-        {
-            // Fallback: IntentExtractionStep should always produce a reply; this is a last-resort safety net
-            state.Reply = "I'm ready to help. Which asset and timeframe would you like a report for?";
         }
     }
 }

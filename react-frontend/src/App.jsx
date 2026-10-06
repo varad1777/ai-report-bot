@@ -571,7 +571,7 @@ function App() {
           </div>
           <div className="sidebar-brand-info">
             <h2 className="sidebar-title">Telemetry Hub</h2>
-            <span className="sidebar-subtitle">RabbitMQ Queue Manager</span>
+            <span className="sidebar-subtitle">In-Memory Queue Manager</span>
           </div>
         </div>
 
@@ -641,7 +641,7 @@ function App() {
                       </div>
 
                       <div className="queue-item-msg">
-                        {isFailed ? (job.errorMessage || job.statusMessage || 'Failed to generate report') : (job.statusMessage || (isQueued ? 'Queued in RabbitMQ...' : ''))}
+                        {isFailed ? (job.errorMessage || job.statusMessage || 'Failed to generate report') : (job.statusMessage || (isQueued ? 'Queued in Memory...' : ''))}
                       </div>
 
                       {(isProcessing || isQueued) && (
@@ -694,7 +694,7 @@ function App() {
           <div className="nav-brand">
             <div>
               <h1 className="nav-title">Industrial Asset Telemetry & Publication Reporting</h1>
-              <p className="nav-subtitle">TimescaleDB Telemetry • Dockerized RabbitMQ Worker • LLM Intent Extractor</p>
+              <p className="nav-subtitle">TimescaleDB Telemetry • In-Memory Background Worker • LLM Intent Extractor</p>
             </div>
           </div>
 
@@ -703,7 +703,7 @@ function App() {
               <span className={`dot ${wsConnected ? '' : 'danger'}`}></span> WebSockets ({wsConnected ? 'Connected' : 'Connecting...'})
             </span>
             <span className="system-pill active">
-              <span className="dot"></span> RabbitMQ Broker (5672)
+              <span className="dot"></span> In-Memory Queue (Active)
             </span>
             <span className="system-pill">
               <span className="dot db"></span> PostgreSQL (5432)
@@ -913,22 +913,10 @@ function App() {
 
                   <div className="chat-suggestions">
                     <button 
-                      onClick={() => handleSendChat("Give me report for pump 3 for last 2 days")}
+                      onClick={() => handleSendChat("Give me report for Boiler Feed Pump Motor for last 2 days")}
                       className="chat-chip on-topic"
                     >
-                      <ChevronRight size={13} /> "Give me report for pump 3 for last 2 days"
-                    </button>
-                    <button 
-                      onClick={() => handleSendChat("Check high vibration alarm logs for motor 2")}
-                      className="chat-chip on-topic"
-                    >
-                      <ChevronRight size={13} /> "Check vibration alarms for motor 2"
-                    </button>
-                    <button 
-                      onClick={() => handleSendChat("Who is Shah Rukh Khan?")}
-                      className="chat-chip off-topic"
-                    >
-                      <ChevronRight size={13} /> "Who is Shah Rukh Khan?" (Off-topic Refusal)
+                      <ChevronRight size={13} /> "Give me report for Boiler Feed Pump Motor for last 2 days"
                     </button>
                   </div>
                 </div>
