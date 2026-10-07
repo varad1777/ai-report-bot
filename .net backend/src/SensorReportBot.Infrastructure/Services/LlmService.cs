@@ -142,12 +142,30 @@ public class LlmService : ILlmService
         var chatResponse = await response.Content.ReadFromJsonAsync<ChatCompletionsResponse>(cancellationToken: ct);
         string? rawContent = chatResponse?.Choices?.FirstOrDefault()?.Message?.Content;
 
-        // Token Usage calculation (from API usage or fallback estimation)
-        bool hasRealUsage = chatResponse?.Usage != null && (chatResponse.Usage.PromptTokens > 0 || chatResponse.Usage.TotalTokens > 0);
-        int promptTokens = hasRealUsage ? chatResponse!.Usage!.PromptTokens : (EstimateTokens(systemPrompt) + EstimateTokens(userMessage));
-        int completionTokens = hasRealUsage ? chatResponse!.Usage!.CompletionTokens : EstimateTokens(rawContent ?? string.Empty);
-        int totalTokens = hasRealUsage ? chatResponse!.Usage!.TotalTokens : (promptTokens + completionTokens);
-        string tokenSource = hasRealUsage ? "API Reported (Exact)" : "Estimated (~4 chars/token)";
+        // Token Usage calculation (from API usage or Ollama direct eval counts or fallback estimation)
+        int promptTokens;
+        int completionTokens;
+        string tokenSource;
+
+        if (chatResponse?.Usage != null && (chatResponse.Usage.PromptTokens > 0 || chatResponse.Usage.TotalTokens > 0))
+        {
+            promptTokens = chatResponse.Usage.PromptTokens;
+            completionTokens = chatResponse.Usage.CompletionTokens;
+            tokenSource = "API Reported Usage (Exact)";
+        }
+        else if (chatResponse?.PromptEvalCount.HasValue == true || chatResponse?.EvalCount.HasValue == true)
+        {
+            promptTokens = chatResponse.PromptEvalCount ?? (EstimateTokens(systemPrompt) + EstimateTokens(userMessage));
+            completionTokens = chatResponse.EvalCount ?? EstimateTokens(rawContent ?? string.Empty);
+            tokenSource = "Ollama Eval Metrics (Exact)";
+        }
+        else
+        {
+            promptTokens = EstimateTokens(systemPrompt) + EstimateTokens(userMessage);
+            completionTokens = EstimateTokens(rawContent ?? string.Empty);
+            tokenSource = "Estimated (~4 chars/token)";
+        }
+        int totalTokens = promptTokens + completionTokens;
 
         string responseBanner =
             "\n╔══════════════════════════════════════════════════════════════════════════════════════\n" +
@@ -190,8 +208,8 @@ public class LlmService : ILlmService
                     string repairedJson = rawContent.Substring(firstBrace, lastBrace - firstBrace + 1);
                     return JsonSerializer.Deserialize<TResponse>(repairedJson, new JsonSerializerOptions 
                     { 
-                    PropertyNameCaseInsensitive = true, 
-                    AllowTrailingCommas = true 
+                        PropertyNameCaseInsensitive = true, 
+                        AllowTrailingCommas = true 
                     });
                 }
                 catch
@@ -250,6 +268,12 @@ public class ChatCompletionsResponse
 
     [JsonPropertyName("usage")]
     public ChatUsage? Usage { get; set; }
+
+    [JsonPropertyName("prompt_eval_count")]
+    public int? PromptEvalCount { get; set; }
+
+    [JsonPropertyName("eval_count")]
+    public int? EvalCount { get; set; }
 }
 
 public class ChatChoice

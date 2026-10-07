@@ -169,8 +169,7 @@ public class EcoReportHtmlBuilder
         return
             "<div class=\"page\">\n" +
             "  <div class=\"sect-title\">1. Executive Summary</div>\n" +
-            "  <div style=\"font-size:8pt;color:#333;margin-bottom:6px;line-height:1.4;\">This report presents health status of connected electrical assets and observations in the installation during the reporting period. The information in the report is intended for qualified personnel who is responsible for serving and maintaining your electrical system. Use this information to correct the issues and improve the performance and availability of the system.</div>\n" +
-            $"  <div style=\"font-size:8pt;color:#111;font-weight:700;margin-bottom:10px;padding:8px 12px;background:#F4F6F8;border-left:3.5px solid #009E4D;border-radius:0 4px 4px 0;line-height:1.45;\"><div style=\"font-size:7.5pt;font-weight:700;color:#009E4D;margin-bottom:2px;\">&#9679; AI Engineering Synthesis</div><b>{H(n.ExecutiveSummary)}</b></div>\n" +
+            $"  <div style=\"font-size:8pt;color:#111;font-weight:700;margin-bottom:12px;padding:10px 14px;background:#F4F6F8;border-left:3.5px solid #009E4D;border-radius:0 4px 4px 0;line-height:1.5;\"><div style=\"font-size:7.5pt;font-weight:700;color:#009E4D;margin-bottom:3px;\">&#9679; AI Engineering Diagnostic Overview</div><b>{H(n.ExecutiveSummary)}</b></div>\n" +
             "  <div class=\"sub-title\">1.1. Context</div>\n" +
             "  <div class=\"ctx-row\">\n" +
             $"    <div class=\"ctx-card\"><div class=\"ctx-num\">1</div><div class=\"ctx-lbl\">Monitored<br/>Machine</div></div>\n" +
