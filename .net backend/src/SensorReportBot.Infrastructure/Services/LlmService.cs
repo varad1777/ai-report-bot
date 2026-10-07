@@ -31,15 +31,29 @@ public class LlmService : ILlmService
         CancellationToken ct = default,
         object? jsonSchema = null)
     {
-        // Structured Console Logging for outgoing LLM request
+        int sysChars = systemPrompt?.Length ?? 0;
+        int sysTokens = EstimateTokens(systemPrompt ?? string.Empty);
+        int userChars = userMessage?.Length ?? 0;
+        int userTokens = EstimateTokens(userMessage ?? string.Empty);
+        int totalInputTokens = sysTokens + userTokens;
+
+        // Structured Console Logging for outgoing LLM request with token counts at each level
         string requestBanner =
             "\n╔══════════════════════════════════════════════════════════════════════════════════════\n" +
-            $"║ 🤖 [LLM REQUEST TO MODEL: {_options.Model}]\n" +
+            $"║ 🤖 [LLM REQUEST DISPATCH]\n" +
+            $"║    • Target Model:     {_options.Model}\n" +
+            $"║    • Endpoint:         {_options.Endpoint}\n" +
+            $"║    • Temperature:      {_options.Temperature}\n" +
+            $"║    • Max Tokens:       {_options.MaxTokens}\n" +
+            $"║ 📊 [INPUT TOKENS BREAKDOWN]:\n" +
+            $"║    • System Prompt:    {sysChars:N0} characters | ~{sysTokens:N0} tokens\n" +
+            $"║    • User / Payload:   {userChars:N0} characters | ~{userTokens:N0} tokens\n" +
+            $"║    • Total Input:      {sysChars + userChars:N0} characters | ~{totalInputTokens:N0} tokens\n" +
             "╠══════════════════════════════════════════════════════════════════════════════════════\n" +
-            $"║ 📜 [SYSTEM PROMPT]:\n{systemPrompt}\n" +
+            $"║ 📜 [SYSTEM PROMPT ({sysTokens:N0} tokens)]:\n{systemPrompt}\n" +
             "╟──────────────────────────────────────────────────────────────────────────────────────\n" +
-            $"║ 💬 [USER PROMPT / HISTORY CONTEXT SENT TO LLM]:\n{userMessage}\n" +
-            "╚══════════════════════════════════════════════════════════════════════════════════════";
+            $"║ 💬 [USER INPUT / PAYLOAD ({userTokens:N0} tokens)]:\n{userMessage}\n" +
+            "╚══════════════════════════════════════════════════════════════════════════════════════\n";
 
         Console.WriteLine(requestBanner);
         _logger.LogInformation("{RequestBanner}", requestBanner);
@@ -126,22 +140,22 @@ public class LlmService : ILlmService
 
         // Token Usage calculation (from API usage or fallback estimation)
         bool hasRealUsage = chatResponse?.Usage != null && (chatResponse.Usage.PromptTokens > 0 || chatResponse.Usage.TotalTokens > 0);
-        int promptTokens = hasRealUsage ? chatResponse!.Usage!.PromptTokens : EstimateTokens(systemPrompt + " " + userMessage);
+        int promptTokens = hasRealUsage ? chatResponse!.Usage!.PromptTokens : (EstimateTokens(systemPrompt) + EstimateTokens(userMessage));
         int completionTokens = hasRealUsage ? chatResponse!.Usage!.CompletionTokens : EstimateTokens(rawContent ?? string.Empty);
         int totalTokens = hasRealUsage ? chatResponse!.Usage!.TotalTokens : (promptTokens + completionTokens);
-        string tokenSource = hasRealUsage ? "API Reported" : "Estimated (~4 chars/token)";
+        string tokenSource = hasRealUsage ? "API Reported (Exact)" : "Estimated (~4 chars/token)";
 
         string responseBanner =
             "\n╔══════════════════════════════════════════════════════════════════════════════════════\n" +
             "║ 📥 [LLM RESPONSE RECEIVED]\n" +
             "╠══════════════════════════════════════════════════════════════════════════════════════\n" +
-            $"║ 📊 [TOKEN USAGE ({tokenSource})]:\n" +
-            $"║    • Prompt Tokens:     {promptTokens}\n" +
-            $"║    • Completion Tokens: {completionTokens}\n" +
-            $"║    • Total Tokens:      {totalTokens}\n" +
+            $"║ 📊 [TOKEN USAGE BREAKDOWN ({tokenSource})]:\n" +
+            $"║    • Prompt / Input Tokens:     {promptTokens:N0}\n" +
+            $"║    • Completion / Output Tokens:{completionTokens:N0}\n" +
+            $"║    • Total Round-Trip Tokens:   {totalTokens:N0}\n" +
             "╟──────────────────────────────────────────────────────────────────────────────────────\n" +
-            $"║ 📝 [RAW LLM OUTPUT]:\n{rawContent}\n" +
-            "╚══════════════════════════════════════════════════════════════════════════════════════";
+            $"║ 📝 [RAW LLM OUTPUT ({completionTokens:N0} tokens)]:\n{rawContent}\n" +
+            "╚══════════════════════════════════════════════════════════════════════════════════════\n";
 
         Console.WriteLine(responseBanner);
         _logger.LogInformation("{ResponseBanner}", responseBanner);

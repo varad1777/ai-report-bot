@@ -461,14 +461,28 @@ function App() {
     }
   };
 
-  const handleDownloadJob = (jobId, assetName) => {
-    const url = `${API_BASE_URL}/reports/jobs/${jobId}/download`;
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `Full_Report_${assetName || 'Asset'}_${new Date().toISOString().slice(0, 10)}.pdf`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+  const handleDownloadJob = async (jobId, assetName) => {
+    try {
+      const url = `${API_BASE_URL}/reports/jobs/${jobId}/download`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        alert(errJson.error || 'The requested job is no longer in memory (server was restarted). Please re-generate the report.');
+        return;
+      }
+      const blob = await res.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = `Full_Report_${assetName || 'Asset'}_${new Date().toISOString().slice(0, 10)}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+      console.error('Download error:', err);
+      alert('Failed to download report: ' + err.message);
+    }
   };
 
   const handleCancelJob = async (jobId) => {
@@ -1141,10 +1155,11 @@ function App() {
                           {chatQueuedJobs[m.id] && (() => {
                             const trackedJobId = chatQueuedJobs[m.id].jobId;
                             const liveJob = jobs.find(j => j.id === trackedJobId || j.jobId === trackedJobId);
-                            const status = liveJob ? (liveJob.statusText || liveJob.status || '').toString().toLowerCase() : 'queued';
+                            const status = liveJob ? (liveJob.statusText || liveJob.status || '').toString().toLowerCase() : (jobs.length > 0 ? 'expired' : 'queued');
                             const isCompleted = status === 'completed' || status === '2';
                             const isFailed = status === 'failed' || status === '3';
                             const isProcessing = status === 'processing' || status === '1';
+                            const isExpired = status === 'expired';
 
                             return (
                               <div className="chat-job-status-box animate-fadeIn">
@@ -1167,10 +1182,31 @@ function App() {
                                     <AlertCircle size={14} className="text-rose" />
                                     <span>Generation failed: {liveJob?.errorMessage || "Please try again"}</span>
                                   </div>
+                                ) : isExpired ? (
+                                  <div className="job-failed-section" style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-start' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                      <AlertTriangle size={14} className="text-amber" />
+                                      <span>Server restarted — previous job expired.</span>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      className="btn-confirm-yes"
+                                      style={{ padding: '4px 10px', fontSize: '11px' }}
+                                      onClick={() => {
+                                        setChatQueuedJobs(prev => {
+                                          const updated = { ...prev };
+                                          delete updated[m.id];
+                                          return updated;
+                                        });
+                                      }}
+                                    >
+                                      <RefreshCw size={12} /> Click to Re-generate
+                                    </button>
+                                  </div>
                                 ) : (
                                   <div className="job-processing-section">
                                     <RefreshCw size={14} className="spin text-indigo" />
-                                    <span>{isProcessing ? "Rendering PDF with QuestPDF charts..." : "Job placed in background queue..."}</span>
+                                    <span>{isProcessing ? "Rendering Schneider Electric EcoStruxure PDF report..." : "Job placed in background queue..."}</span>
                                   </div>
                                 )}
                               </div>

@@ -32,8 +32,19 @@ public static class DependencyInjection
         services.AddScoped<IChatHistoryRepository, ChatHistoryRepository>();
         services.AddScoped<IChatService, ChatService>();
 
-        // QuestPDF Report Service
-        services.AddSingleton<IPdfReportService, QuestPdfReportService>();
+        // ── EcoStruxure Report Pipeline ──────────────────────────────────────
+        // ReportEvidenceService: TimescaleDB SQL aggregation (no LLM)
+        services.AddScoped<IReportEvidenceService, ReportEvidenceService>();
+
+        // ReportNarrativeService: LLM call with strict JSON schema (text only)
+        services.AddScoped<IReportNarrativeService, ReportNarrativeService>();
+
+        // EcoReportHtmlBuilder: Schneider Electric HTML template merger
+        services.AddSingleton<EcoReportHtmlBuilder>();
+
+        // EcoReportService: full pipeline orchestrator (Phase 1→2→3→4)
+        // Replaces QuestPdfReportService as the active PDF renderer.
+        services.AddScoped<IPdfReportService, EcoReportService>();
 
         // PDF Generation Asynchronous In-Memory Job Queue & Background Service
         services.AddSingleton<IPdfJobQueue, InMemoryPdfJobQueue>();
