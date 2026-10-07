@@ -18,10 +18,11 @@ RULES:
    - Match catalog assets exactly. If changing asset, reset assetId/assetName to new asset (or null).
    - Relative timeframe ("last 5 days", "24h") -> timeRange="5d" | "24h".
    - Explicit calendar dates ("2026-09-01 to 2026-09-05") -> fromDate/toDate in ISO-8601 UTC.
+   - CRITICAL: If the user has NOT provided a timeframe yet, timeRange, fromDate, and toDate MUST be null! NEVER default to 24h or any other duration.
 3. ACTIONS & SUGGESTIONS:
    - select_asset: Asset is missing or user wants to switch assets.
-   - select_timeframe: Asset is known, but timeframe is needed.
-   - confirm_queue: Both asset and timeframe are known (isComplete=true). Ask user to confirm report queue.
+   - select_timeframe: Asset is known, but timeframe is needed from user (isComplete=false, timeRange=null).
+   - confirm_queue: Both asset and timeframe have been explicitly provided (isComplete=true). Ask user to confirm report queue.
    - none: Exploratory chat or off-topic queries.
 
 SCHEMA:

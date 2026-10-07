@@ -30,7 +30,7 @@ public sealed record SyncedTurn(
 public static class ChatResponseSynchronizer
 {
     public static readonly IReadOnlyList<string> TimeframePresets = new[] { "24h", "5d", "14d", "30d" };
-    public static readonly IReadOnlyList<string> ConfirmOptions = new[] { "Yes, Queue PDF Report", "Change Options" };
+    public static readonly IReadOnlyList<string> ConfirmOptions = new[] { "Yes", "Change Options" };
 
     public static SyncedTurn Sync(
         LlmChatReplyDto raw,

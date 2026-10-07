@@ -112,6 +112,10 @@ public class LlmService : ILlmService
             max_tokens = _options.MaxTokens,
             stream = false,
             response_format = responseFormat,
+            options = new
+            {
+                num_ctx = _options.NumCtx > 0 ? _options.NumCtx : 8192
+            },
             messages = new[]
             {
                 new { role = "system", content = systemPrompt },

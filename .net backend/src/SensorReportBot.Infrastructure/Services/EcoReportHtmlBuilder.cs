@@ -51,13 +51,16 @@ public class EcoReportHtmlBuilder
             sb.Append(BuildMotorDeepDivePage2(model, motor, pageNum++));
         }
 
-        // Page 7: Appendix (Health Index Definitions)
+        // Page 7: AI Engineering Diagnostics & Maintenance Action Plan
+        sb.Append(BuildAiDiagnosticsPage(model, pageNum++));
+
+        // Page 8: Appendix (Health Index Definitions)
         sb.Append(BuildAppendixPage(model, pageNum++));
 
-        // Page 8: Asset Specifications
+        // Page 9: Asset Specifications
         sb.Append(BuildAssetDetailsPage(model, pageNum++));
 
-        // Page 9: Official Schneider Electric Back Cover
+        // Page 10: Official Schneider Electric Back Cover
         sb.Append(BuildBackCover(pageNum));
 
         sb.Append("</body></html>");
@@ -102,7 +105,8 @@ public class EcoReportHtmlBuilder
             ".dot-poor{background:#D93025}\n" +
             ".matrix-lbl{font-size:7pt;color:#666;text-align:right;padding-right:6px}\n" +
             ".matrix-axis{font-size:7pt;font-weight:700;color:#444;text-align:center;margin-top:4px}\n" +
-            ".inference-line{font-size:8pt;color:#222;margin:6px 0;line-height:1.4}\n" +
+            ".inference-line{font-size:8pt;font-weight:700;color:#111;margin:6px 0;line-height:1.4}\n" +
+            ".ai-bold{font-weight:700;color:#111}\n" +
             ".threshold-callout{font-size:7.5pt;margin:3px 0}\n" +
             ".th-yellow{color:#b45309;font-weight:600}\n" +
             ".th-red{color:#dc2626;font-weight:600}\n" +
@@ -166,7 +170,7 @@ public class EcoReportHtmlBuilder
             "<div class=\"page\">\n" +
             "  <div class=\"sect-title\">1. Executive Summary</div>\n" +
             "  <div style=\"font-size:8pt;color:#333;margin-bottom:6px;line-height:1.4;\">This report presents health status of connected electrical assets and observations in the installation during the reporting period. The information in the report is intended for qualified personnel who is responsible for serving and maintaining your electrical system. Use this information to correct the issues and improve the performance and availability of the system.</div>\n" +
-            $"  <div style=\"font-size:8pt;color:#444;margin-bottom:10px;padding:6px 10px;background:#F4F6F8;border-left:3px solid #009E4D;border-radius:0 4px 4px 0;\">{H(n.ExecutiveSummary)}</div>\n" +
+            $"  <div style=\"font-size:8pt;color:#111;font-weight:700;margin-bottom:10px;padding:8px 12px;background:#F4F6F8;border-left:3.5px solid #009E4D;border-radius:0 4px 4px 0;line-height:1.45;\"><div style=\"font-size:7.5pt;font-weight:700;color:#009E4D;margin-bottom:2px;\">&#9679; AI Engineering Synthesis</div><b>{H(n.ExecutiveSummary)}</b></div>\n" +
             "  <div class=\"sub-title\">1.1. Context</div>\n" +
             "  <div class=\"ctx-row\">\n" +
             $"    <div class=\"ctx-card\"><div class=\"ctx-num\">1</div><div class=\"ctx-lbl\">Monitored<br/>Machine</div></div>\n" +
@@ -177,7 +181,7 @@ public class EcoReportHtmlBuilder
             "  <div class=\"sub-title\">1.2. Asset Health</div>\n" +
             "  <div style=\"font-size:7.5pt;color:#444;margin-bottom:4px;\">The following Health Matrix summarizes the asset health status of the asset computed by the platform and evaluated by automated diagnostics.</div>\n" +
             BuildHealthMatrixSvg(e.OverallHealth) +
-            $"  <div class=\"inference-line\" style=\"margin-top:8px;\">{H(n.HealthMatrixInference)}</div>\n" +
+            $"  <div class=\"inference-line\" style=\"margin-top:8px;\"><b>{H(n.HealthMatrixInference)}</b></div>\n" +
             PageFooter(pageNum) +
             "</div>\n";
     }
@@ -227,7 +231,7 @@ public class EcoReportHtmlBuilder
         }
 
         sb.Append("  </tbody></table>\n");
-        sb.Append($"  <div class=\"inference-line\" style=\"margin:8px 0 4px 0;\">{H(n.AssetAnalysisInference)}</div>\n");
+        sb.Append($"  <div class=\"inference-line\" style=\"margin:8px 0 4px 0;\"><b>{H(n.AssetAnalysisInference)}</b></div>\n");
         sb.Append("  <div style=\"margin:8px 0 12px 0;\">\n");
         sb.Append(HealthStatusBar("Motor electrical health", hColor));
         sb.Append(HealthStatusBar("Motor mechanical health", hColor));
@@ -243,14 +247,14 @@ public class EcoReportHtmlBuilder
             ? n.HealthIndexBulletPoints
             : new List<string>
             {
-                "The equipment is in good health state.",
-                "No abnormal behaviour has been detected.",
-                "Wear and aging are far from any critical level."
+                $"{e.Asset.Name} operates stably within specified limits with an overall health score of {e.HealthScore}/100.",
+                "Thermal monitoring across stator windings and bearings confirms healthy operating margins.",
+                "Shaft train dynamic vibration and acceleration amplitudes demonstrate balanced mechanical alignment."
             };
 
         foreach (var bp in bulletPoints)
         {
-            sb.Append($"  <div style=\"font-size:7.5pt;color:#444;margin:2px 0 2px 10px;\">&bull; {H(bp)}</div>\n");
+            sb.Append($"  <div style=\"font-size:7.5pt;font-weight:700;color:#111;margin:2px 0 2px 10px;\">&bull; <b>{H(bp)}</b></div>\n");
         }
 
         sb.Append(PageFooter(pageNum));
@@ -340,7 +344,7 @@ public class EcoReportHtmlBuilder
         sb.Append("  </div>\n");
 
         // AI Worst Score Inference Line
-        sb.Append($"  <div class=\"inference-line\" style=\"margin-top:6px;\">{H(n.WorstScoreInference)}</div>\n");
+        sb.Append($"  <div class=\"inference-line\" style=\"margin-top:6px;\"><b>{H(n.WorstScoreInference)}</b></div>\n");
         sb.Append("  <div style=\"font-size:7pt;color:#444;margin-top:2px;\">The higher the health score more alarming is the machine's condition.</div>\n");
         sb.Append("  <div class=\"threshold-callout th-yellow\">Yellow threshold (&gt;7): To be closely monitored, perform a machine check at the earliest opportunity.</div>\n");
         sb.Append("  <div class=\"threshold-callout th-red\">Red threshold (&gt;9): Machine inspection is urgently required.</div>\n");
@@ -362,7 +366,7 @@ public class EcoReportHtmlBuilder
         sb.Append("  </div>\n");
 
         // AI Power Supply Inference Line
-        sb.Append($"  <div class=\"inference-line\">{H(n.PowerSupplyInference)}</div>\n");
+        sb.Append($"  <div class=\"inference-line\"><b>{H(n.PowerSupplyInference)}</b></div>\n");
 
         sb.Append(PageFooter(pageNum));
         sb.Append("</div>\n");
@@ -370,14 +374,79 @@ public class EcoReportHtmlBuilder
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // PAGE 7 — APPENDIX (HEALTH INDEX DEFINITIONS)
+    // PAGE 7 — AI DIAGNOSTICS, ROOT CAUSE ANALYSIS & ACTION PLAN
+    // ═══════════════════════════════════════════════════════════════════════
+    private static string BuildAiDiagnosticsPage(EcoReportModel m, int pageNum)
+    {
+        var e = m.Evidence;
+        var n = m.Narrative;
+        var sb = new StringBuilder();
+
+        sb.Append("<div class=\"page\">\n");
+        sb.Append("  <div class=\"top-ribbon\">AI ENGINEERING DIAGNOSTICS & ACTION PLAN</div>\n");
+        sb.Append("  <div class=\"sect-title\">2. AI Diagnostic Inferences & Predictive Maintenance</div>\n");
+        sb.Append("  <div style=\"font-size:7.5pt;color:#444;margin-bottom:8px;line-height:1.4;\">The following diagnostic observations and root cause inferences were synthesized by the AI Diagnostic Engine across all monitored telemetry channels, operating points, and dynamic threshold limits during the reporting period.</div>\n");
+
+        // 2.1 Sensor Interpretations
+        sb.Append("  <div class=\"sub-title\" style=\"margin-top:4px;\">2.1 Telemetry Observations & Physical Channel Interpretations</div>\n");
+        if (n.SensorInterpretations != null && n.SensorInterpretations.Any())
+        {
+            sb.Append("  <table style=\"margin:4px 0 8px 0;\"><thead><tr><th style=\"width:150px;\">Telemetry Channel</th><th style=\"width:70px;text-align:center;\">Severity</th><th>Engineering Observation</th></tr></thead><tbody>\n");
+            foreach (var si in n.SensorInterpretations.Take(5))
+            {
+                string sColor = si.Severity == "High" ? "#D93025" : si.Severity == "Medium" ? "#F5A623" : "#009E4D";
+                sb.Append($"<tr><td><b>{H(si.SignalName)}</b></td><td style=\"text-align:center;\"><span style=\"background:{sColor};color:#fff;padding:1px 6px;border-radius:3px;font-size:6.5pt;font-weight:700;\">{H(si.Severity)}</span></td><td style=\"font-size:7pt;color:#111;\"><b>{H(si.Observation)}</b></td></tr>\n");
+            }
+            sb.Append("  </tbody></table>\n");
+        }
+
+        // 2.2 Root Cause Analysis
+        sb.Append("  <div class=\"sub-title\" style=\"margin-top:6px;\">2.2 Root Cause Analysis & Physical Anomaly Diagnosis</div>\n");
+        if (n.RootCauseAnalysis != null && n.RootCauseAnalysis.Any())
+        {
+            sb.Append("  <table style=\"margin:4px 0 8px 0;\"><thead><tr><th style=\"width:160px;\">Observed Finding</th><th>Physical Root Cause</th><th style=\"width:75px;text-align:center;\">Likelihood</th></tr></thead><tbody>\n");
+            foreach (var rca in n.RootCauseAnalysis.Take(3))
+            {
+                string lColor = rca.Likelihood == "High" ? "#D93025" : rca.Likelihood == "Medium" ? "#F5A623" : "#009E4D";
+                sb.Append($"<tr><td><b>{H(rca.Finding)}</b></td><td style=\"font-size:7pt;color:#111;\"><b>{H(rca.PossibleCause)}</b></td><td style=\"text-align:center;\"><span style=\"background:{lColor};color:#fff;padding:1px 6px;border-radius:3px;font-size:6.5pt;font-weight:700;\">{H(rca.Likelihood)}</span></td></tr>\n");
+            }
+            sb.Append("  </tbody></table>\n");
+        }
+
+        // 2.3 Recommended Actions
+        sb.Append("  <div class=\"sub-title\" style=\"margin-top:6px;\">2.3 Prioritized Maintenance Action Plan</div>\n");
+        if (n.Recommendations != null && n.Recommendations.Any())
+        {
+            sb.Append("  <table style=\"margin:4px 0 8px 0;\"><thead><tr><th>Recommended Action</th><th style=\"width:75px;text-align:center;\">Priority</th><th style=\"width:90px;text-align:center;\">Timeframe</th></tr></thead><tbody>\n");
+            foreach (var rec in n.Recommendations.Take(3))
+            {
+                string pColor = rec.Priority == "High" ? "#D93025" : rec.Priority == "Medium" ? "#F5A623" : "#009E4D";
+                sb.Append($"<tr><td style=\"font-size:7pt;color:#111;\"><b>{H(rec.Action)}</b></td><td style=\"text-align:center;\"><span style=\"background:{pColor};color:#fff;padding:1px 6px;border-radius:3px;font-size:6.5pt;font-weight:700;\">{H(rec.Priority)}</span></td><td style=\"text-align:center;font-size:7pt;color:#555;\">{H(rec.Timeframe)}</td></tr>\n");
+            }
+            sb.Append("  </tbody></table>\n");
+        }
+
+        // 2.4 Conclusion & Verdict
+        if (!string.IsNullOrWhiteSpace(n.Conclusion))
+        {
+            sb.Append("  <div class=\"sub-title\" style=\"margin-top:6px;\">2.4 Engineering Verdict & Conclusion</div>\n");
+            sb.Append($"  <div style=\"font-size:7.5pt;color:#111;font-weight:700;padding:6px 10px;background:#F4F6F8;border-left:3px solid #009E4D;border-radius:0 4px 4px 0;line-height:1.4;\"><b>{H(n.Conclusion)}</b></div>\n");
+        }
+
+        sb.Append(PageFooter(pageNum));
+        sb.Append("</div>\n");
+        return sb.ToString();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // PAGE 8 — APPENDIX (HEALTH INDEX DEFINITIONS)
     // ═══════════════════════════════════════════════════════════════════════
     private static string BuildAppendixPage(EcoReportModel m, int pageNum)
     {
         return
             "<div class=\"page\">\n" +
-            "  <div class=\"sect-title\">2. Appendix</div>\n" +
-            "  <div class=\"sub-title\">2.1. Health Index Interpretations</div>\n" +
+            "  <div class=\"sect-title\">3. Appendix</div>\n" +
+            "  <div class=\"sub-title\">3.1. Health Index Interpretations</div>\n" +
             "  <table style=\"margin-top:10px;\">\n" +
             "    <thead><tr><th style=\"width:80px;text-align:center;\">Level</th><th>Definition</th></tr></thead>\n" +
             "    <tbody>\n" +
@@ -393,7 +462,7 @@ public class EcoReportHtmlBuilder
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // PAGE 8 — ASSET DETAILS
+    // PAGE 9 — ASSET DETAILS
     // ═══════════════════════════════════════════════════════════════════════
     private static string BuildAssetDetailsPage(EcoReportModel m, int pageNum)
     {
@@ -401,8 +470,8 @@ public class EcoReportHtmlBuilder
         var sb = new StringBuilder();
 
         sb.Append("<div class=\"page\">\n");
-        sb.Append("  <div class=\"sect-title\">3.3. Asset Details</div>\n");
-        sb.Append("  <div class=\"sub-title\">2.1.1. Rotating Equipment's</div>\n");
+        sb.Append("  <div class=\"sect-title\">3.2. Asset Details</div>\n");
+        sb.Append("  <div class=\"sub-title\">3.2.1. Rotating Equipment Specifications</div>\n");
         sb.Append("  <table style=\"margin-top:10px;\"><thead><tr><th>Asset details</th><th>Manufacturer</th><th>Model</th><th>Rated Current (A)</th><th>EAA Connection date</th></tr></thead><tbody>\n");
 
         foreach (var spec in e.AssetSpecs)

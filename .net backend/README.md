@@ -71,7 +71,7 @@ Hub: `/hubs/chat`. Invoke `SendMessage(sessionId, userMessage)`; listen for `Rec
   "isComplete": true,
   "replyMessage": "I have configured the report for Boiler Feed Pump Motor covering the last 5 days. Would you like me to queue the PDF report now?",
   "suggestedAction": "confirm_queue",
-  "suggestedOptions": ["Yes, Queue PDF Report", "Change Options"],
+  "suggestedOptions": ["Yes", "Change Options"],
   "extractedParameters": { "assetId": 1, "assetName": "Boiler Feed Pump Motor", "signalIds": null, "timeRange": "5d", "fromDate": null, "toDate": null, "mode": "raw" }
 }
 ```

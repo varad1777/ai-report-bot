@@ -30,9 +30,8 @@ import {
 } from 'lucide-react';
 import './App.css';
 
+const SIGNAL_COLORS = ['#009E4D', '#007A3C', '#005A2C', '#0084D6', '#F5A623', '#D93025', '#10B981', '#059669'];
 const API_BASE_URL = 'http://localhost:5000/api';
-
-const SIGNAL_COLORS = ['#4f46e5', '#0284c7', '#059669', '#d97706', '#dc2626', '#8b5cf6', '#ec4899', '#14b8a6'];
 
 function App() {
   // Report State
@@ -584,8 +583,8 @@ function App() {
             <Activity size={22} />
           </div>
           <div className="sidebar-brand-info">
-            <h2 className="sidebar-title">Telemetry Hub</h2>
-            <span className="sidebar-subtitle">In-Memory Queue Manager</span>
+            <h2 className="sidebar-title">EcoStruxure™</h2>
+            <span className="sidebar-subtitle">Asset Advisor • PDF Engine</span>
           </div>
         </div>
 
@@ -706,24 +705,27 @@ function App() {
         {/* Top Navbar */}
         <header className="top-navbar">
           <div className="nav-brand">
+            <div className="nav-logo">
+              <Zap size={22} />
+            </div>
             <div>
-              <h1 className="nav-title">Industrial Asset Telemetry & Publication Reporting</h1>
-              <p className="nav-subtitle">TimescaleDB Telemetry • In-Memory Background Worker • LLM Intent Extractor</p>
+              <h2 className="nav-title">Schneider Electric EcoStruxure™ Asset Advisor</h2>
+              <p className="nav-subtitle">Rotating Machine Condition Monitoring & Automated Diagnostic Reports</p>
             </div>
           </div>
 
           <div className="nav-badges">
+            <span className="system-pill brand-pill">
+              <span className="dot brand"></span> Life Is On &nbsp;|&nbsp; <strong>Schneider Electric</strong>
+            </span>
             <span className={`system-pill ${wsConnected ? 'active' : ''}`}>
-              <span className={`dot ${wsConnected ? '' : 'danger'}`}></span> WebSockets ({wsConnected ? 'Connected' : 'Connecting...'})
+              <span className={`dot ${wsConnected ? '' : 'danger'}`}></span> SignalR ({wsConnected ? 'Connected' : 'Connecting...'})
             </span>
             <span className="system-pill active">
-              <span className="dot"></span> In-Memory Queue (Active)
+              <span className="dot"></span> PDF Queue Active
             </span>
             <span className="system-pill">
-              <span className="dot db"></span> PostgreSQL (5432)
-            </span>
-            <span className="system-pill">
-              <span className="dot api"></span> .NET API (5000)
+              <span className="dot db"></span> TimescaleDB (5432)
             </span>
           </div>
         </header>
@@ -899,10 +901,10 @@ function App() {
           <div className="chat-wrapper">
             <div className="chat-header">
               <div className="chat-header-title">
-                <Bot size={20} className="icon-indigo" />
+                <Bot size={20} className="icon-emerald" />
                 <div>
-                  <h3>Sensor Report Assistant</h3>
-                  <p>LLM Intent Extraction Step</p>
+                  <h3>EcoStruxure™ AI Diagnostic Assistant</h3>
+                  <p>Rotating Machine Health Advisor</p>
                 </div>
               </div>
 
@@ -1139,7 +1141,7 @@ function App() {
                                   }
                                 }}
                               >
-                                <CheckCircle2 size={13} /> {isQueueing ? "Queuing..." : "Yes, Queue PDF Report"}
+                                <CheckCircle2 size={13} /> {isQueueing ? "Queuing..." : "Yes"}
                               </button>
                               <button 
                                 type="button"

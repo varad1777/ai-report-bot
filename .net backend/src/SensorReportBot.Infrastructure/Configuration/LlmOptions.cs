@@ -9,8 +9,11 @@ public class LlmOptions
     public string Model { get; set; } = "qwen2.5:1.5b";
     public double Temperature { get; set; } = 0.1;
 
-    /// <summary>Output budget. The contract JSON (no option lists) needs roughly 120-180 tokens.</summary>
-    public int MaxTokens { get; set; } = 256;
+    /// <summary>Output budget. The contract JSON needs roughly 250-800 tokens.</summary>
+    public int MaxTokens { get; set; } = 1024;
+
+    /// <summary>Context window size (tokens) sent to Ollama / local LLM server.</summary>
+    public int NumCtx { get; set; } = 8192;
 
     /// <summary>
     /// Ask for grammar-constrained decoding with the contract's JSON Schema (Ollama / llama.cpp).
