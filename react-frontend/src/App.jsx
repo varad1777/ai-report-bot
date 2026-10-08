@@ -221,10 +221,44 @@ function App() {
       }
     });
 
+    connection.on("ReceiveJobProgress", (data) => {
+      // data: { jobId, progressPercentage, statusMessage, status }
+      setJobs(prevJobs => {
+        const idMatches = (j) => (j.id === data.jobId || j.jobId === data.jobId);
+        const exists = prevJobs.some(idMatches);
+        if (exists) {
+          return prevJobs.map(j => {
+            if (idMatches(j)) {
+              return {
+                ...j,
+                progressPercentage: data.progressPercentage,
+                statusMessage: data.statusMessage,
+                status: data.status,
+                statusText: data.status,
+                completedAt: (data.status === 'Completed' || data.status === '2') ? new Date().toISOString() : j.completedAt
+              };
+            }
+            return j;
+          });
+        } else {
+          return [{
+            jobId: data.jobId,
+            id: data.jobId,
+            progressPercentage: data.progressPercentage,
+            statusMessage: data.statusMessage,
+            status: data.status,
+            statusText: data.status,
+            createdAt: new Date().toISOString()
+          }, ...prevJobs];
+        }
+      });
+    });
+
     connection.start()
       .then(() => {
         setWsConnected(true);
-        connection.invoke("GetHistory", sessionId);
+        connection.invoke("JoinSession", sessionId).catch(e => console.warn("JoinSession error", e));
+        connection.invoke("GetHistory", sessionId).catch(e => console.warn("GetHistory error", e));
       })
       .catch(err => {
         console.warn("SignalR Connection failed, falling back to REST API", err);
@@ -443,12 +477,29 @@ function App() {
           includeAlerts,
           includeInsights,
           includeCharts,
-          includeFullRawData
+          includeFullRawData,
+          sessionId
         })
       });
 
       if (!res.ok) throw new Error(`Server returned HTTP ${res.status}`);
       const data = await res.json();
+
+      if (data && data.jobId) {
+        setJobs(prev => [{
+          jobId: data.jobId,
+          id: data.jobId,
+          assetId,
+          assetName: (assets.find(a => a.assetId === assetId)?.name) || `Asset-${assetId}`,
+          sessionId,
+          status: 'Queued',
+          statusText: 'Queued',
+          statusMessage: data.message || 'Job placed in background queue',
+          progressPercentage: 5,
+          createdAt: data.createdAt || new Date().toISOString()
+        }, ...prev]);
+      }
+
       await fetchJobs();
       return data;
     } catch (err) {
@@ -1206,9 +1257,52 @@ function App() {
                                     </button>
                                   </div>
                                 ) : (
-                                  <div className="job-processing-section">
-                                    <RefreshCw size={14} className="spin text-indigo" />
-                                    <span>{isProcessing ? "Rendering Schneider Electric EcoStruxure PDF report..." : "Job placed in background queue..."}</span>
+                                  <div className="chat-job-progress-card animate-fadeIn">
+                                    <div className="job-progress-top">
+                                      <div className="job-progress-title">
+                                        <RefreshCw size={13} className="spin icon-spin-emerald" />
+                                        <span>{isProcessing ? "EcoStruxure™ Report Pipeline" : "Job Queued"}</span>
+                                      </div>
+                                      <span className="job-percentage-badge">
+                                        {liveJob?.progressPercentage || (isProcessing ? 15 : 5)}%
+                                      </span>
+                                    </div>
+
+                                    <div className="chat-progress-bar-track">
+                                      <div 
+                                        className="chat-progress-bar-fill" 
+                                        style={{ width: `${Math.max(6, Math.min(100, liveJob?.progressPercentage || (isProcessing ? 15 : 5)))}%` }}
+                                      />
+                                    </div>
+
+                                    <div className="job-progress-status-row">
+                                      <span className="pulse-dot"></span>
+                                      <span className="status-label">
+                                        {liveJob?.statusMessage || (isProcessing ? "Executing report generation pipeline..." : "Job placed in background queue...")}
+                                      </span>
+                                    </div>
+
+                                    <div className="job-progress-pipeline-steps">
+                                      <div className={`pipeline-step ${(liveJob?.progressPercentage || 0) >= 20 ? 'active' : ''} ${(liveJob?.progressPercentage || 0) >= 50 ? 'done' : ''}`}>
+                                        <span className="step-num">1</span>
+                                        <span className="step-text">TimescaleDB</span>
+                                      </div>
+                                      <span className="step-divider">›</span>
+                                      <div className={`pipeline-step ${(liveJob?.progressPercentage || 0) >= 50 ? 'active' : ''} ${(liveJob?.progressPercentage || 0) >= 75 ? 'done' : ''}`}>
+                                        <span className="step-num">2</span>
+                                        <span className="step-text">AI Narrative</span>
+                                      </div>
+                                      <span className="step-divider">›</span>
+                                      <div className={`pipeline-step ${(liveJob?.progressPercentage || 0) >= 75 ? 'active' : ''} ${(liveJob?.progressPercentage || 0) >= 90 ? 'done' : ''}`}>
+                                        <span className="step-num">3</span>
+                                        <span className="step-text">HTML Layout</span>
+                                      </div>
+                                      <span className="step-divider">›</span>
+                                      <div className={`pipeline-step ${(liveJob?.progressPercentage || 0) >= 90 ? 'active' : ''} ${(liveJob?.progressPercentage || 0) >= 100 ? 'done' : ''}`}>
+                                        <span className="step-num">4</span>
+                                        <span className="step-text">Chromium PDF</span>
+                                      </div>
+                                    </div>
                                   </div>
                                 )}
                               </div>
@@ -1229,8 +1323,11 @@ function App() {
                     <Bot size={16} />
                   </div>
                   <div className="chat-bubble-content">
-                    <div className="bubble-text typing">
-                      <span></span><span></span><span></span>
+                    <div className="bubble-text typing-loader-box">
+                      <div className="typing-dots">
+                        <span></span><span></span><span></span>
+                      </div>
+                      <span className="typing-status-hint">EcoStruxure™ AI analyzing request...</span>
                     </div>
                   </div>
                 </div>

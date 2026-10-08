@@ -24,6 +24,7 @@ builder.Services.AddInfrastructure(builder.Configuration);
 
 builder.Services.AddControllers();
 builder.Services.AddSignalR();
+builder.Services.AddSingleton<SensorReportBot.Application.Interfaces.IJobProgressNotifier, SensorReportBot.Api.Services.SignalRJobProgressNotifier>();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddHealthChecks();

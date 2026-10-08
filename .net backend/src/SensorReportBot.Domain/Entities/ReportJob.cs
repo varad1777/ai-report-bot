@@ -17,6 +17,7 @@ public class ReportJob
     public bool IncludeInsights { get; set; } = true;
     public bool IncludeCharts { get; set; } = true;
     public bool IncludeFullRawData { get; set; } = true;
+    public string? SessionId { get; set; }
 
     public ReportJobStatus Status { get; set; } = ReportJobStatus.Queued;
     public string StatusMessage { get; set; } = "Job queued in processing pipeline";

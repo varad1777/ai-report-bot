@@ -43,7 +43,6 @@ public static class DependencyInjection
         services.AddSingleton<EcoReportHtmlBuilder>();
 
         // EcoReportService: full pipeline orchestrator (Phase 1→2→3→4)
-        // Replaces QuestPdfReportService as the active PDF renderer.
         services.AddScoped<IPdfReportService, EcoReportService>();
 
         // PDF Generation Asynchronous In-Memory Job Queue & Background Service

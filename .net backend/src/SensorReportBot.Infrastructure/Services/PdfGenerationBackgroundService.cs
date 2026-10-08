@@ -65,55 +65,33 @@ public class PdfGenerationBackgroundService : BackgroundService
         }
 
         using var scope = _scopeFactory.CreateScope();
-        var telemetryRepo = scope.ServiceProvider.GetRequiredService<ITelemetryRepository>();
         var pdfService = scope.ServiceProvider.GetRequiredService<IPdfReportService>();
 
-        // Step 1: Query Database
-        await _jobQueue.UpdateJobProgressAsync(job.Id, 20, "Querying raw telemetry readings from TimescaleDB...");
+        DateTime toTime = job.To ?? DateTime.UtcNow;
+        DateTime fromTime = job.From ?? toTime.AddDays(-7);
+
+        // Step 1: Initialize
+        await _jobQueue.UpdateJobProgressAsync(job.Id, 10, "Initializing report generation pipeline...");
 
         if (job.Status == SensorReportBot.Domain.Enums.ReportJobStatus.Cancelled)
         {
-            _logger.LogInformation("Job {JobId} was cancelled. Aborting DB query processing.", job.Id);
+            _logger.LogInformation("Job {JobId} was cancelled. Aborting processing.", job.Id);
             return;
         }
 
-        var requestDto = new ReportRequestDto
-        {
-            AssetId = job.AssetId,
-            SignalIds = job.SignalIds,
-            From = job.From,
-            To = job.To,
-            IncludeEvents = job.IncludeEvents,
-            IncludeAlerts = job.IncludeAlerts,
-            IncludeInsights = job.IncludeInsights,
-            IncludeCharts = job.IncludeCharts,
-            IncludeFullRawData = job.IncludeFullRawData
-        };
-
-        var reportData = await telemetryRepo.GenerateReportDataAsync(requestDto, ct);
-
-        if (job.Status == SensorReportBot.Domain.Enums.ReportJobStatus.Cancelled)
-        {
-            _logger.LogInformation("Job {JobId} was cancelled after DB query. Aborting PDF rendering.", job.Id);
-            return;
-        }
-
-        int totalPoints = 0;
-        foreach (var sig in reportData.Signals)
-        {
-            totalPoints += sig.DataPoints.Count;
-        }
-
-        // Step 2: Render PDF
-        await _jobQueue.UpdateJobProgressAsync(job.Id, 65, $"Rendering publication PDF with {totalPoints:N0} unaggregated readings...");
-
-        if (job.Status == SensorReportBot.Domain.Enums.ReportJobStatus.Cancelled)
-        {
-            _logger.LogInformation("Job {JobId} was cancelled before PDF render. Aborting.", job.Id);
-            return;
-        }
-
-        byte[] pdfBytes = await pdfService.GeneratePdfAsync(reportData, ct);
+        // Step 2: Render PDF through all phases (SQL Evidence, AI Narrative, HTML compilation, Chromium render)
+        byte[] pdfBytes = await pdfService.GeneratePdfAsync(
+            job.AssetId, 
+            fromTime, 
+            toTime, 
+            async (percent, message) =>
+            {
+                if (job.Status != SensorReportBot.Domain.Enums.ReportJobStatus.Cancelled)
+                {
+                    await _jobQueue.UpdateJobProgressAsync(job.Id, percent, message);
+                }
+            },
+            ct);
 
         if (job.Status == SensorReportBot.Domain.Enums.ReportJobStatus.Cancelled)
         {
@@ -122,10 +100,6 @@ public class PdfGenerationBackgroundService : BackgroundService
         }
 
         // Step 3: Complete
-        await _jobQueue.UpdateJobProgressAsync(job.Id, 95, "Finalizing report file...");
-
-        if (job.Status == SensorReportBot.Domain.Enums.ReportJobStatus.Cancelled) return;
-
         string safeAssetName = string.Join("_", job.AssetName.Split(Path.GetInvalidFileNameChars())).Replace(" ", "_");
         string fileName = $"{safeAssetName}_Report_{DateTime.UtcNow:yyyyMMdd_HHmm}.pdf";
 

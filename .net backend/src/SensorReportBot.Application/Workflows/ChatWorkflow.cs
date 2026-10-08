@@ -24,6 +24,10 @@ public class ChatWorkflow
         foreach (var step in _steps)
         {
             await step.RunAsync(state, ct);
+                // LoadHistoryStep
+                // IntentExtractionStep
+                // SaveUserMessageStep
+                // PersistAssistantReplyStep
         }
     }
 }

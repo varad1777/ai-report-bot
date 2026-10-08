@@ -32,6 +32,7 @@ public class ReportRequestDto
     public bool IncludeInsights { get; set; } = true;
     public bool IncludeCharts { get; set; } = true;
     public bool IncludeFullRawData { get; set; } = true;
+    public string? SessionId { get; set; }
 }
 
 public class SignalDataPointDto

@@ -25,10 +25,12 @@ public class InMemoryPdfJobQueue : IPdfJobQueue
     private readonly ConcurrentDictionary<Guid, ReportJob> _jobs = new();
     private readonly string _storageDir;
     private readonly ILogger<InMemoryPdfJobQueue> _logger;
+    private readonly IJobProgressNotifier? _notifier;
 
-    public InMemoryPdfJobQueue(ILogger<InMemoryPdfJobQueue> logger)
+    public InMemoryPdfJobQueue(ILogger<InMemoryPdfJobQueue> logger, IJobProgressNotifier? notifier = null)
     {
         _logger = logger;
+        _notifier = notifier;
         _channel = Channel.CreateUnbounded<Guid>(new UnboundedChannelOptions
         {
             SingleReader = true,
@@ -112,6 +114,7 @@ public class InMemoryPdfJobQueue : IPdfJobQueue
             IncludeInsights = request.IncludeInsights,
             IncludeCharts = request.IncludeCharts,
             IncludeFullRawData = request.IncludeFullRawData,
+            SessionId = request.SessionId,
             Status = ReportJobStatus.Queued,
             StatusMessage = "Job placed in processing queue",
             ProgressPercentage = 0,
@@ -120,6 +123,11 @@ public class InMemoryPdfJobQueue : IPdfJobQueue
 
         _jobs[job.Id] = job;
         PersistJob(job);
+
+        if (_notifier != null)
+        {
+            await _notifier.NotifyProgressAsync(job.SessionId, job.Id, 0, job.StatusMessage, "Queued");
+        }
 
         await _channel.Writer.WriteAsync(job.Id, ct);
         _logger.LogInformation("Enqueued PDF generation job {JobId} for asset '{AssetName}'", job.Id, assetName);
@@ -142,6 +150,7 @@ public class InMemoryPdfJobQueue : IPdfJobQueue
                 JobId = j.Id,
                 AssetId = j.AssetId,
                 AssetName = j.AssetName,
+                SessionId = j.SessionId,
                 Status = j.Status,
                 StatusMessage = j.StatusMessage,
                 ProgressPercentage = j.ProgressPercentage,
@@ -157,26 +166,30 @@ public class InMemoryPdfJobQueue : IPdfJobQueue
         return Task.FromResult<IReadOnlyList<ReportJobDto>>(list);
     }
 
-    public Task UpdateJobProgressAsync(Guid jobId, int progressPercentage, string statusMessage)
+    public async Task UpdateJobProgressAsync(Guid jobId, int progressPercentage, string statusMessage)
     {
         if (_jobs.TryGetValue(jobId, out var job))
         {
-            if (job.Status == ReportJobStatus.Cancelled) return Task.CompletedTask;
+            if (job.Status == ReportJobStatus.Cancelled) return;
 
             if (job.StartedAt == null) job.StartedAt = DateTime.UtcNow;
             job.Status = ReportJobStatus.Processing;
             job.ProgressPercentage = progressPercentage;
             job.StatusMessage = statusMessage;
             PersistJob(job);
+
+            if (_notifier != null)
+            {
+                await _notifier.NotifyProgressAsync(job.SessionId, jobId, progressPercentage, statusMessage, "Processing");
+            }
         }
-        return Task.CompletedTask;
     }
 
-    public Task CompleteJobAsync(Guid jobId, byte[] pdfData, string fileName)
+    public async Task CompleteJobAsync(Guid jobId, byte[] pdfData, string fileName)
     {
         if (_jobs.TryGetValue(jobId, out var job))
         {
-            if (job.Status == ReportJobStatus.Cancelled) return Task.CompletedTask;
+            if (job.Status == ReportJobStatus.Cancelled) return;
 
             job.Status = ReportJobStatus.Completed;
             job.ProgressPercentage = 100;
@@ -188,15 +201,19 @@ public class InMemoryPdfJobQueue : IPdfJobQueue
 
             PersistJob(job);
             _logger.LogInformation("Job {JobId} marked Completed and saved to disk. File size: {Size} bytes", jobId, pdfData.Length);
+
+            if (_notifier != null)
+            {
+                await _notifier.NotifyProgressAsync(job.SessionId, jobId, 100, job.StatusMessage, "Completed");
+            }
         }
-        return Task.CompletedTask;
     }
 
-    public Task FailJobAsync(Guid jobId, string errorMessage)
+    public async Task FailJobAsync(Guid jobId, string errorMessage)
     {
         if (_jobs.TryGetValue(jobId, out var job))
         {
-            if (job.Status == ReportJobStatus.Cancelled) return Task.CompletedTask;
+            if (job.Status == ReportJobStatus.Cancelled) return;
 
             job.Status = ReportJobStatus.Failed;
             job.StatusMessage = "Failed to generate report";
@@ -205,11 +222,15 @@ public class InMemoryPdfJobQueue : IPdfJobQueue
 
             PersistJob(job);
             _logger.LogError("Job {JobId} marked Failed: {Error}", jobId, errorMessage);
+
+            if (_notifier != null)
+            {
+                await _notifier.NotifyProgressAsync(job.SessionId, jobId, job.ProgressPercentage, errorMessage, "Failed");
+            }
         }
-        return Task.CompletedTask;
     }
 
-    public Task<bool> CancelJobAsync(Guid jobId)
+    public async Task<bool> CancelJobAsync(Guid jobId)
     {
         if (_jobs.TryGetValue(jobId, out var job))
         {
@@ -220,10 +241,15 @@ public class InMemoryPdfJobQueue : IPdfJobQueue
                 job.CompletedAt = DateTime.UtcNow;
                 PersistJob(job);
                 _logger.LogInformation("Job {JobId} was cancelled by user.", jobId);
-                return Task.FromResult(true);
+
+                if (_notifier != null)
+                {
+                    await _notifier.NotifyProgressAsync(job.SessionId, jobId, job.ProgressPercentage, job.StatusMessage, "Cancelled");
+                }
+                return true;
             }
         }
-        return Task.FromResult(false);
+        return false;
     }
 
     public async Task<byte[]?> GetJobPdfAsync(Guid jobId)

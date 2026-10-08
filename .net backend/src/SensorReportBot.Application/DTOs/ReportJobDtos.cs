@@ -8,6 +8,7 @@ public class ReportJobDto
     public Guid JobId { get; set; }
     public int AssetId { get; set; }
     public string AssetName { get; set; } = string.Empty;
+    public string? SessionId { get; set; }
     public ReportJobStatus Status { get; set; }
     public string StatusText => Status.ToString();
     public string StatusMessage { get; set; } = string.Empty;

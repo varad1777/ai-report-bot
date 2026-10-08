@@ -96,6 +96,7 @@ public class ReportsController : ControllerBase
             JobId = job.Id,
             AssetId = job.AssetId,
             AssetName = job.AssetName,
+            SessionId = job.SessionId,
             Status = job.Status,
             StatusMessage = job.StatusMessage,
             ProgressPercentage = job.ProgressPercentage,

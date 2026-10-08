@@ -18,10 +18,24 @@ public class ChatHub : Hub
         _logger = logger;
     }
 
+    public async Task JoinSession(string sessionId)
+    {
+        if (!string.IsNullOrWhiteSpace(sessionId))
+        {
+            await Groups.AddToGroupAsync(Context.ConnectionId, sessionId);
+            _logger.LogInformation("SignalR Connection {ConnectionId} joined session {SessionId}", Context.ConnectionId, sessionId);
+        }
+    }
+
     public async Task SendMessage(string sessionId, string userMessage)
     {
         try
         {
+            if (!string.IsNullOrWhiteSpace(sessionId))
+            {
+                await Groups.AddToGroupAsync(Context.ConnectionId, sessionId);
+            }
+
             _logger.LogInformation("WebSocket Chat Message Received from Session {SessionId}: '{Message}'", sessionId, userMessage);
             
             var result = await _chatService.ProcessChatMessageAsync(sessionId, userMessage);
@@ -46,6 +60,11 @@ public class ChatHub : Hub
     {
         try
         {
+            if (!string.IsNullOrWhiteSpace(sessionId))
+            {
+                await Groups.AddToGroupAsync(Context.ConnectionId, sessionId);
+            }
+
             var history = await _chatService.GetHistoryAsync(sessionId);
             await Clients.Caller.SendAsync("ReceiveHistory", history);
         }

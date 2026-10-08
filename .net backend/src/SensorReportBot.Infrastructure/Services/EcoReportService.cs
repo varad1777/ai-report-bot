@@ -19,9 +19,6 @@ using SensorReportBot.Application.Interfaces;
 ///
 /// Steps 1 and 2 run sequentially (LLM requires evidence first).
 /// Steps 3 and 4 are fast (< 400ms combined).
-///
-/// Replaces QuestPdfReportService for the EcoStruxure report format.
-/// The existing QuestPdfReportService remains available for the raw telemetry report.
 /// </summary>
 public class EcoReportService : IPdfReportService
 {
@@ -44,27 +41,47 @@ public class EcoReportService : IPdfReportService
 
     /// <summary>
     /// Full pipeline: TimescaleDB → LLM → HTML → PDF bytes.
-    /// Called by PdfGenerationBackgroundService via IPdfReportService.
+    /// Called by PdfGenerationBackgroundService via IPdfReportService directly with asset parameters.
     /// </summary>
-    public async Task<byte[]> GeneratePdfAsync(ReportDataDto reportData, CancellationToken ct = default)
+    public async Task<byte[]> GeneratePdfAsync(
+        int assetId, 
+        DateTime from, 
+        DateTime to, 
+        Func<int, string, Task>? onProgress = null, 
+        CancellationToken ct = default)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        _logger.LogInformation("EcoReportService.GeneratePdfAsync started for AssetId={AssetId}", reportData.Asset.AssetId);
+        _logger.LogInformation("EcoReportService.GeneratePdfAsync started for AssetId={AssetId}", assetId);
 
         // ── Phase 1: SQL Evidence extraction ──────────────────────────────
+        if (onProgress != null)
+        {
+            await onProgress(20, "Extracting telemetry evidence and domain aggregates from TimescaleDB...");
+        }
+
         var evidence = await _evidenceService.BuildEvidenceAsync(
-            reportData.Asset.AssetId,
-            reportData.From,
-            reportData.To,
+            assetId,
+            from,
+            to,
             ct);
         _logger.LogInformation("Phase 1 (SQL Evidence) complete — {Ms}ms", sw.ElapsedMilliseconds);
 
         // ── Phase 2: LLM narrative generation ─────────────────────────────
+        if (onProgress != null)
+        {
+            await onProgress(50, "Generating AI diagnostic inferences & narrative analysis via LLM...");
+        }
+
         var narrative = await _narrativeService.GenerateNarrativeAsync(evidence, ct);
         _logger.LogInformation("Phase 2 (LLM Narrative) complete — {Ms}ms", sw.ElapsedMilliseconds);
 
         // ── Phase 3: Build HTML string ────────────────────────────────────
-        string reportId = $"ECO-{DateTime.UtcNow:yyyyMMdd}-{reportData.Asset.AssetId:D4}";
+        if (onProgress != null)
+        {
+            await onProgress(75, "Compiling 8-page EcoStruxure™ publication layout...");
+        }
+
+        string reportId = $"ECO-{DateTime.UtcNow:yyyyMMdd}-{assetId:D4}";
         var model = new EcoReportModel
         {
             Evidence    = evidence,
@@ -77,10 +94,20 @@ public class EcoReportService : IPdfReportService
         _logger.LogInformation("Phase 3 (HTML Template) complete — {Ms}ms, HTML chars={C}", sw.ElapsedMilliseconds, html.Length);
 
         // ── Phase 4: HTML → PDF via Chromium/Playwright ───────────────────
+        if (onProgress != null)
+        {
+            await onProgress(90, "Rendering publication-grade PDF via headless Chromium...");
+        }
+
         byte[] pdfBytes = await ConvertHtmlToPdfAsync(html, ct);
         _logger.LogInformation(
             "EcoReportService complete — TotalMs={Ms}, PDFBytes={B}",
             sw.ElapsedMilliseconds, pdfBytes.Length);
+
+        if (onProgress != null)
+        {
+            await onProgress(98, "Finalizing report file...");
+        }
 
         return pdfBytes;
     }
