@@ -64,7 +64,11 @@ public static class ChatResponseSynchronizer
         problem ??= timeProblem;
 
         bool timeUnchanged = timeRange == prev.TimeRange && fromDate == prev.FromDate && toDate == prev.ToDate;
-        if (llmAction == SuggestedActions.SelectTimeframe && timeUnchanged)
+        if ((llmAction == SuggestedActions.SelectTimeframe || llmAction == SuggestedActions.SelectAsset || !raw.IsComplete) && !prev.HasTime)
+        {
+            timeRange = fromDate = toDate = null;
+        }
+        else if (llmAction == SuggestedActions.SelectTimeframe && timeUnchanged)
         {
             timeRange = fromDate = toDate = null;
         }
