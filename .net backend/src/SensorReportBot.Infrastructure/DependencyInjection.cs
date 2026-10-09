@@ -1,5 +1,6 @@
 namespace SensorReportBot.Infrastructure;
 
+using System;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using SensorReportBot.Application.Interfaces;
@@ -11,27 +12,33 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
-        // Bind LLM and RabbitMQ configuration sections
+        // Bind LLM configuration section
         services.Configure<LlmOptions>(configuration.GetSection(LlmOptions.SectionName));
         services.Configure<JevOptions>(configuration.GetSection(JevOptions.SectionName));
-        services.Configure<RabbitMqOptions>(configuration.GetSection(RabbitMqOptions.SectionName));
 
-        // Register HttpClient for LLM Service with generous timeout for local models
-        services.AddHttpClient<ILlmService, LlmService>(client =>
+        // Register HttpClient for LLM Service
+        services.AddHttpClient<ILlmService, LlmService>((sp, client) =>
         {
-            client.Timeout = System.TimeSpan.FromSeconds(30);
+            var llm = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<LlmOptions>>().Value;
+            client.Timeout = TimeSpan.FromSeconds(Math.Max(5, llm.TimeoutSeconds));
         });
 
         services.AddHttpClient<IJevDecisionService, JevDecisionService>(client =>
         {
-            client.Timeout = System.TimeSpan.FromSeconds(8);
+            client.Timeout = TimeSpan.FromSeconds(8);
+        });
+
+        // Bind Laya System-1 Fast Decision Engine options & HttpClient
+        services.Configure<LayaOptions>(configuration.GetSection(LayaOptions.SectionName));
+        services.AddHttpClient<ILayaClient, LayaClient>((sp, client) =>
+        {
+            var laya = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<LayaOptions>>().Value;
+            client.BaseAddress = new Uri(laya.BaseUrl.TrimEnd('/') + "/");
+            client.Timeout = TimeSpan.FromSeconds(Math.Max(1, laya.TimeoutSeconds));
         });
 
         // System prompt provider (reads system prompts from Prompts/ directory)
         services.AddSingleton<IPromptProvider, FilePromptProvider>();
-
-        // Primary Guard service (pure LLM/SLM classifier using structured JSON output)
-
 
         // TimescaleDB Telemetry Repository
         services.AddScoped<ITelemetryRepository, TelemetryRepository>();
@@ -40,11 +47,21 @@ public static class DependencyInjection
         services.AddScoped<IChatHistoryRepository, ChatHistoryRepository>();
         services.AddScoped<IChatService, ChatService>();
 
-        // QuestPDF Report Service
-        services.AddSingleton<IPdfReportService, QuestPdfReportService>();
+        // ── EcoStruxure Report Pipeline ──────────────────────────────────────
+        // ReportEvidenceService: TimescaleDB SQL aggregation (no LLM)
+        services.AddScoped<IReportEvidenceService, ReportEvidenceService>();
 
-        // PDF Generation Asynchronous RabbitMQ Job Queue & Background Service
-        services.AddSingleton<IPdfJobQueue, RabbitMqPdfJobQueue>();
+        // ReportNarrativeService: LLM call with strict JSON schema (text only)
+        services.AddScoped<IReportNarrativeService, ReportNarrativeService>();
+
+        // EcoReportHtmlBuilder: Schneider Electric HTML template merger
+        services.AddSingleton<EcoReportHtmlBuilder>();
+
+        // EcoReportService: full pipeline orchestrator (Phase 1→2→3→4)
+        services.AddScoped<IPdfReportService, EcoReportService>();
+
+        // PDF Generation Asynchronous In-Memory Job Queue & Background Service
+        services.AddSingleton<IPdfJobQueue, InMemoryPdfJobQueue>();
         services.AddHostedService<PdfGenerationBackgroundService>();
 
         return services;
