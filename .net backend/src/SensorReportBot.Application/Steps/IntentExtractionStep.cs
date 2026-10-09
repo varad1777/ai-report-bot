@@ -284,6 +284,20 @@ public class IntentExtractionStep : IChatStep
             isRelevant = topicRes?.AsBoolean ?? true;
         }
 
+        if (!isRelevant)
+        {
+            _logger.LogInformation("Laya filtered out off-topic message '{UserMsg}' - skipping System-2 LLM execution.", userMsg);
+            var fast = new FastTurnResult(
+                Reply: "I am SensorBot, dedicated exclusively to industrial plant equipment, sensor telemetry, and report generation. Please ask about plant machinery or select an asset from the catalog.",
+                IsOnTopic: false,
+                IsComplete: prevParams.HasAsset && prevParams.HasTime,
+                SuggestedAction: !prevParams.HasAsset ? SuggestedActions.SelectAsset : (prevParams.HasTime ? SuggestedActions.ConfirmQueue : SuggestedActions.SelectTimeframe),
+                SuggestedOptions: !prevParams.HasAsset ? assets.Select(a => a.Name).ToList() : DefaultTimeframeOptions,
+                Parameters: prevParams
+            );
+            return new LayaAnalysis(fast, intent, false, matchedAsset, timeResult);
+        }
+
         // ── 6. Pass Insights to Qwen (System-2 Deep Reasoning) ──
         // For conversational inputs, typos ("3.5 dddaysss"), slang, or multi-intent questions:
         // Forward Laya's extracted signals to Qwen so Qwen resolves it with 100% precision.

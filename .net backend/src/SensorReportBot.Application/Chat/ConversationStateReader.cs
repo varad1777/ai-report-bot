@@ -15,6 +15,7 @@ public static class ConversationStateReader
 
     private sealed class Meta
     {
+        public bool? IsOnTopic { get; set; }
         public ExtractedReportParametersDto? ExtractedParameters { get; set; }
     }
 
@@ -28,6 +29,20 @@ public static class ConversationStateReader
         catch (JsonException)
         {
             return null;
+        }
+    }
+
+    public static bool IsOnTopic(string? metadataJson)
+    {
+        if (string.IsNullOrWhiteSpace(metadataJson)) return true;
+        try
+        {
+            var meta = JsonSerializer.Deserialize<Meta>(metadataJson, Options);
+            return meta?.IsOnTopic ?? true;
+        }
+        catch (JsonException)
+        {
+            return true;
         }
     }
 }

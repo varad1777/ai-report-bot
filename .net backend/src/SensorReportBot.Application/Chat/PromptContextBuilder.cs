@@ -37,12 +37,16 @@ public static class PromptContextBuilder
 
         if (recentMessages is { Count: > 0 })
         {
-            sb.AppendLine("RECENT:");
-            foreach (var m in recentMessages.TakeLast(LoadLimit))
+            var filteredMessages = FilterOnTopicHistory(recentMessages);
+            if (filteredMessages.Count > 0)
             {
-                bool isUser = string.Equals(m.Role, "user", StringComparison.OrdinalIgnoreCase);
-                sb.Append(isUser ? "U: " : "A: ")
-                  .AppendLine(Clip(m.Content, isUser ? MaxUserLineChars : MaxAssistantLineChars));
+                sb.AppendLine("RECENT:");
+                foreach (var m in filteredMessages.TakeLast(LoadLimit))
+                {
+                    bool isUser = string.Equals(m.Role, "user", StringComparison.OrdinalIgnoreCase);
+                    sb.Append(isUser ? "U: " : "A: ")
+                      .AppendLine(Clip(m.Content, isUser ? MaxUserLineChars : MaxAssistantLineChars));
+                }
             }
         }
 
@@ -65,6 +69,28 @@ public static class PromptContextBuilder
             !string.IsNullOrWhiteSpace(p.FromDate) ? $"time={p.FromDate}..{(string.IsNullOrWhiteSpace(p.ToDate) ? "now" : p.ToDate)}" :
             "time=none";
         return $"{asset} {time}";
+    }
+
+    private static List<ChatMessageEntity> FilterOnTopicHistory(IReadOnlyList<ChatMessageEntity> messages)
+    {
+        var result = new List<ChatMessageEntity>();
+        for (int i = 0; i < messages.Count; i++)
+        {
+            var msg = messages[i];
+            if (string.Equals(msg.Role, "assistant", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!ConversationStateReader.IsOnTopic(msg.Metadata))
+                {
+                    if (result.Count > 0 && string.Equals(result[^1].Role, "user", StringComparison.OrdinalIgnoreCase))
+                    {
+                        result.RemoveAt(result.Count - 1);
+                    }
+                    continue;
+                }
+            }
+            result.Add(msg);
+        }
+        return result;
     }
 
     private static string Clip(string text, int max)
