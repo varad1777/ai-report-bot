@@ -2,6 +2,7 @@ namespace SensorReportBot.Domain.Entities;
 
 using System;
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 
 public class ChatMessageEntity
 {
@@ -30,6 +31,12 @@ public class ExtractedReportParametersDto
 
     public string? Mode { get; set; }
 
+    [JsonIgnore]
+    public bool HasAsset => AssetId is > 0;
+
+    [JsonIgnore]
+    public bool HasTime => !string.IsNullOrWhiteSpace(TimeRange) || !string.IsNullOrWhiteSpace(FromDate);
+
     public ExtractedReportParametersDto Clone() => new()
     {
         AssetId = AssetId,
@@ -40,6 +47,14 @@ public class ExtractedReportParametersDto
         ToDate = ToDate,
         Mode = Mode
     };
+}
+
+public static class SuggestedActions
+{
+    public const string SelectAsset = "select_asset";
+    public const string SelectTimeframe = "select_timeframe";
+    public const string ConfirmQueue = "confirm_queue";
+    public const string None = "none";
 }
 
 public class ChatRequestState
