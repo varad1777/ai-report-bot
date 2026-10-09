@@ -22,6 +22,15 @@ public static class DependencyInjection
             client.Timeout = TimeSpan.FromSeconds(Math.Max(5, llm.TimeoutSeconds));
         });
 
+        // Bind Laya System-1 Fast Decision Engine options & HttpClient
+        services.Configure<LayaOptions>(configuration.GetSection(LayaOptions.SectionName));
+        services.AddHttpClient<ILayaClient, LayaClient>((sp, client) =>
+        {
+            var laya = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<LayaOptions>>().Value;
+            client.BaseAddress = new Uri(laya.BaseUrl.TrimEnd('/') + "/");
+            client.Timeout = TimeSpan.FromSeconds(Math.Max(1, laya.TimeoutSeconds));
+        });
+
         // System prompt provider (reads system prompts from Prompts/ directory)
         services.AddSingleton<IPromptProvider, FilePromptProvider>();
 

@@ -14,25 +14,44 @@ using SensorReportBot.Application.Interfaces;
 using SensorReportBot.Domain.Entities;
 
 /// <summary>
-/// The "brain" of the pipeline: ONE LLM call per user message. The model authors the reply and
-/// extracts the report parameters; the server then syncs those parameters with the database
-/// (<see cref="ChatResponseSynchronizer"/>) and fills the UI chips. No regex fast-paths, no canned
-/// replies: if the model cannot answer, an <see cref="LlmUnavailableException"/> is raised.
+/// The hybrid intelligence engine of the pipeline:
+/// 1. Fast-Path (Laya System-1): ~25ms decision model for deterministic, clean inputs (resets, exact buttons, clean asset/time selections).
+/// 2. Deep-Path (Ollama Qwen System-2): Handles conversational nuance, typos ("3.5 dddaysss"), slang, and multi-intent queries.
+/// Laya's extracted hints are ALWAYS passed to Qwen whenever input is conversational or incomplete,
+/// guaranteeing fast pre-digested decisions without false off-topic refusals or accidental resets.
 /// </summary>
 public class IntentExtractionStep : IChatStep
 {
     private readonly ILlmService _llmService;
+    private readonly ILayaClient _layaClient;
     private readonly IPromptProvider _promptProvider;
     private readonly ITelemetryRepository _telemetryRepo;
     private readonly ILogger<IntentExtractionStep> _logger;
 
+    private static readonly HashSet<string> ConfirmWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "yes", "yeah", "yep", "sure", "ok", "okay", "confirm", "proceed", "generate", "queue", "queue it", "generate report", "yes please", "do it"
+    };
+
+    private static readonly HashSet<string> ResetWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "reset", "clear", "cancel", "start over", "reset options", "clear options", "restart"
+    };
+
+    private static readonly string[] DefaultTimeframeOptions = new[]
+    {
+        "⚡ Last 24 Hours", "📊 Last 5 Days", "🗓️ Last 2 Weeks", "📈 Last 30 Days", "Custom Calendar Range"
+    };
+
     public IntentExtractionStep(
         ILlmService llmService,
+        ILayaClient layaClient,
         IPromptProvider promptProvider,
         ITelemetryRepository telemetryRepo,
         ILogger<IntentExtractionStep> logger)
     {
         _llmService = llmService;
+        _layaClient = layaClient;
         _promptProvider = promptProvider;
         _telemetryRepo = telemetryRepo;
         _logger = logger;
@@ -41,12 +60,40 @@ public class IntentExtractionStep : IChatStep
     public async Task RunAsync(ChatRequestState state, CancellationToken ct)
     {
         var assets = await _telemetryRepo.GetAssetsAsync(ct);
+        string? layaHintNote = null;
+
+        // ── 1. Fast-Path & Hint Extraction (Laya System-1 ~25ms) ──
+        if (_layaClient.IsEnabled)
+        {
+            try
+            {
+                var analysis = await AnalyzeWithLayaAsync(state, assets, ct);
+                if (analysis.FastResult != null)
+                {
+                    state.Reply = analysis.FastResult.Reply;
+                    state.IsOnTopic = analysis.FastResult.IsOnTopic;
+                    state.IsComplete = analysis.FastResult.IsComplete;
+                    state.SuggestedAction = analysis.FastResult.SuggestedAction;
+                    state.SuggestedOptions = analysis.FastResult.SuggestedOptions.ToList();
+                    state.ExtractedParameters = analysis.FastResult.Parameters;
+                    return;
+                }
+
+                // Pass Laya's System-1 pre-analysis hints directly into Qwen
+                layaHintNote = BuildLayaHintNote(analysis);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Laya fast-path encountered an issue; falling back to deep LLM.");
+            }
+        }
+
+        // ── 2. Deep-Path: Ollama Qwen with Laya hints for reasoning (2-3s) ──
         string systemPrompt = await BuildSystemPromptAsync(assets, ct);
 
-        var (reply, turn) = await AskAsync(state, systemPrompt, assets, note: null, ct);
+        var (reply, turn) = await AskAsync(state, systemPrompt, assets, note: layaHintNote, ct);
 
-        // One corrective retry when the model invented an asset / gave an unusable timeframe /
-        // returned no text. The retry reply is again written by the model.
+        // One corrective retry when reply is empty or invented invalid schema parameters.
         string? problem = string.IsNullOrWhiteSpace(reply?.ReplyMessage)
             ? "replyMessage was empty. Write a helpful reply."
             : turn?.Problem;
@@ -54,7 +101,8 @@ public class IntentExtractionStep : IChatStep
         if (problem != null)
         {
             _logger.LogInformation("Retrying LLM call once. Problem: {Problem}", problem);
-            var (retryReply, retryTurn) = await AskAsync(state, systemPrompt, assets, problem, ct);
+            string retryNote = string.IsNullOrWhiteSpace(layaHintNote) ? problem : $"{layaHintNote} | RETRY_PROBLEM: {problem}";
+            var (retryReply, retryTurn) = await AskAsync(state, systemPrompt, assets, retryNote, ct);
             if (!string.IsNullOrWhiteSpace(retryReply?.ReplyMessage))
             {
                 reply = retryReply;
@@ -71,6 +119,205 @@ public class IntentExtractionStep : IChatStep
         state.SuggestedAction = turn.SuggestedAction;
         state.SuggestedOptions = turn.SuggestedOptions.ToList();
         state.ExtractedParameters = turn.Parameters;
+    }
+
+    private static string? BuildLayaHintNote(LayaAnalysis analysis)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(analysis.LayaIntent))
+            parts.Add($"intent={analysis.LayaIntent}");
+        if (analysis.MatchedAsset != null)
+            parts.Add($"matched_asset=\"{analysis.MatchedAsset.Name}\" (id={analysis.MatchedAsset.AssetId})");
+        if (analysis.ParsedTimeframe is { Found: true })
+            parts.Add($"parsed_timeframe=\"{analysis.ParsedTimeframe.TimeRange ?? $"{analysis.ParsedTimeframe.FromDate}..{analysis.ParsedTimeframe.ToDate}"}\"");
+        if (analysis.IsRelevant.HasValue)
+            parts.Add($"relevance={(analysis.IsRelevant.Value ? "on_topic" : "off_topic")}");
+
+        return parts.Count > 0 ? "LAYA_PREANALYSIS: " + string.Join(" | ", parts) : null;
+    }
+
+    private async Task<LayaAnalysis> AnalyzeWithLayaAsync(
+        ChatRequestState state,
+        IReadOnlyList<AssetDto> assets,
+        CancellationToken ct)
+    {
+        string userMsg = state.UserMessage?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(userMsg))
+            return new LayaAnalysis(null, null, null, null, null);
+
+        var prevParams = state.PreviousParameters?.Clone() ?? new ExtractedReportParametersDto();
+
+        // ── 1. Deterministic Reset / Clear Request (C# Exact Match) ──
+        if (IsResetRequest(userMsg))
+        {
+            var emptyParams = new ExtractedReportParametersDto();
+            var fast = new FastTurnResult(
+                Reply: "I have cleared the current report options. Which asset from the catalog would you like to examine?",
+                IsOnTopic: true,
+                IsComplete: false,
+                SuggestedAction: SuggestedActions.SelectAsset,
+                SuggestedOptions: assets.Select(a => a.Name).ToList(),
+                Parameters: emptyParams
+            );
+            return new LayaAnalysis(fast, "reset_options", true, null, null);
+        }
+
+        // ── 2. Deterministic Confirm Queue when already complete (C# Exact Match) ──
+        if (prevParams.HasAsset && prevParams.HasTime && IsConfirmation(userMsg))
+        {
+            var fast = new FastTurnResult(
+                Reply: $"Understood. I am queueing the telemetry report generation for {prevParams.AssetName} ({prevParams.TimeRange ?? $"{prevParams.FromDate} to {prevParams.ToDate}"}).",
+                IsOnTopic: true,
+                IsComplete: true,
+                SuggestedAction: SuggestedActions.ConfirmQueue,
+                SuggestedOptions: new[] { "Yes", "Change Options" },
+                Parameters: prevParams
+            );
+            return new LayaAnalysis(fast, "confirm_queue", true, null, null);
+        }
+
+        // ── 3. Asset & Timeframe Matching via C# Engine ──
+        var assetMatch = AssetMatcher.Match(userMsg, assets);
+        var matchedAsset = assetMatch.Asset;
+        var timeResult = TimeframeParser.Parse(userMsg, allowBareNumber: true, utcNow: DateTime.UtcNow);
+        bool hasConversationalNuance = IsConversationalNuance(userMsg);
+
+        // Clean direct match for both asset and timeframe (no ambiguity, no conversational nuance)
+        if (matchedAsset != null && timeResult.Found && !hasConversationalNuance)
+        {
+            var targetParams = new ExtractedReportParametersDto
+            {
+                AssetId = matchedAsset.AssetId,
+                AssetName = matchedAsset.Name,
+                TimeRange = timeResult.TimeRange,
+                FromDate = timeResult.FromDate,
+                ToDate = timeResult.ToDate,
+                Mode = "raw"
+            };
+
+            var fast = new FastTurnResult(
+                Reply: $"I have configured the telemetry report for {targetParams.AssetName} covering {targetParams.TimeRange ?? $"{targetParams.FromDate} to {targetParams.ToDate}"}. Would you like me to generate this report?",
+                IsOnTopic: true,
+                IsComplete: true,
+                SuggestedAction: SuggestedActions.ConfirmQueue,
+                SuggestedOptions: new[] { "Yes", "Change Options" },
+                Parameters: targetParams
+            );
+            return new LayaAnalysis(fast, "configure_report", true, matchedAsset, timeResult);
+        }
+
+        // Clean direct asset match without timeframe (and no conversational questions)
+        if (matchedAsset != null && !timeResult.Found && !hasConversationalNuance && !prevParams.HasTime)
+        {
+            var targetParams = new ExtractedReportParametersDto
+            {
+                AssetId = matchedAsset.AssetId,
+                AssetName = matchedAsset.Name,
+                Mode = "raw"
+            };
+
+            var fast = new FastTurnResult(
+                Reply: $"Great! I can help you configure a report for the {targetParams.AssetName}. Could you please specify the timeframe you're interested in?",
+                IsOnTopic: true,
+                IsComplete: false,
+                SuggestedAction: SuggestedActions.SelectTimeframe,
+                SuggestedOptions: DefaultTimeframeOptions,
+                Parameters: targetParams
+            );
+            return new LayaAnalysis(fast, "configure_report", true, matchedAsset, null);
+        }
+
+        // Clean direct timeframe answer when asset is already selected
+        if (prevParams.HasAsset && !prevParams.HasTime && timeResult.Found && !hasConversationalNuance)
+        {
+            prevParams.TimeRange = timeResult.TimeRange;
+            prevParams.FromDate = timeResult.FromDate;
+            prevParams.ToDate = timeResult.ToDate;
+
+            var fast = new FastTurnResult(
+                Reply: $"I have configured the telemetry report for {prevParams.AssetName} covering {prevParams.TimeRange ?? $"{prevParams.FromDate} to {prevParams.ToDate}"}. Would you like me to generate this report?",
+                IsOnTopic: true,
+                IsComplete: true,
+                SuggestedAction: SuggestedActions.ConfirmQueue,
+                SuggestedOptions: new[] { "Yes", "Change Options" },
+                Parameters: prevParams
+            );
+            return new LayaAnalysis(fast, "configure_report", true, null, timeResult);
+        }
+
+        // ── 4. Laya System-1 Fast Classification (for hints) ──
+        var intentRes = await _layaClient.AskAsync(
+            userMsg,
+            "What is the user trying to do?",
+            "choice",
+            choices: new[] { "greeting", "reset_options", "confirm_queue", "configure_report", "general_question" },
+            ct);
+
+        string intent = intentRes?.AsString?.ToLowerInvariant() ?? "general_question";
+
+        // Clean greeting fast-path (only when no asset is selected yet)
+        if (intent == "greeting" && !prevParams.HasAsset && !hasConversationalNuance)
+        {
+            var fast = new FastTurnResult(
+                Reply: "Hello! I am SensorBot, your industrial telemetry and EcoStruxure report assistant. Which machine or equipment would you like to examine?",
+                IsOnTopic: true,
+                IsComplete: false,
+                SuggestedAction: SuggestedActions.SelectAsset,
+                SuggestedOptions: assets.Select(a => a.Name).ToList(),
+                Parameters: prevParams
+            );
+            return new LayaAnalysis(fast, intent, true, null, null);
+        }
+
+        // ── 5. Relevance Guardrail ──
+        // CRITICAL FIX: If an asset is already selected (in-progress workflow), NEVER flag timeframe or follow-up answers as off-topic!
+        bool isRelevant = true;
+        if (!prevParams.HasAsset && !prevParams.HasTime)
+        {
+            var topicRes = await _layaClient.AskAsync(
+                userMsg,
+                "Is this message relevant to industrial plant machinery, sensors, telemetry, equipment monitoring, or report generation?",
+                "noul",
+                choices: null,
+                ct);
+
+            isRelevant = topicRes?.AsBoolean ?? true;
+        }
+
+        // ── 6. Pass Insights to Qwen (System-2 Deep Reasoning) ──
+        // For conversational inputs, typos ("3.5 dddaysss"), slang, or multi-intent questions:
+        // Forward Laya's extracted signals to Qwen so Qwen resolves it with 100% precision.
+        _logger.LogInformation("Laya passing request to full LLM reasoning (intent: {Intent}, asset: {Asset}, time: {Time}, isRelevant: {IsRelevant}).",
+            intent, matchedAsset?.Name, timeResult?.TimeRange, isRelevant);
+
+        return new LayaAnalysis(null, intent, isRelevant, matchedAsset, timeResult);
+    }
+
+    private static bool IsResetRequest(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message)) return false;
+        string trimmed = message.Trim().TrimEnd('.', '!', '?');
+        return ResetWords.Contains(trimmed);
+    }
+
+    private static bool IsConversationalNuance(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        if (text.Contains('?')) return true;
+
+        string lower = text.ToLowerInvariant();
+        return lower.Contains("will it") || lower.Contains("is it") || lower.Contains("can we")
+            || lower.Contains("can you") || lower.Contains("ok") || lower.Contains("okay")
+            || lower.Contains("fine") || lower.Contains("possible") || lower.Contains("should")
+            || lower.Contains("what about") || lower.Contains("how about") || lower.Contains("bhai")
+            || lower.Contains("bro") || lower.Contains("please") || lower.Contains("just");
+    }
+
+    private static bool IsConfirmation(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message)) return false;
+        string trimmed = message.Trim().TrimEnd('.', '!', '?');
+        return ConfirmWords.Contains(trimmed);
     }
 
     private async Task<(LlmChatReplyDto? Reply, SyncedTurn? Turn)> AskAsync(
@@ -102,10 +349,6 @@ public class IntentExtractionStep : IChatStep
         return (reply, ChatResponseSynchronizer.Sync(reply, state.PreviousParameters, assets));
     }
 
-    /// <summary>
-    /// Static rules + asset catalog. Kept identical between requests so Ollama / llama.cpp can reuse
-    /// the cached KV prefix instead of re-processing it on every message.
-    /// </summary>
     private async Task<string> BuildSystemPromptAsync(IReadOnlyList<AssetDto> assets, CancellationToken ct)
     {
         string template = await _promptProvider.GetPromptAsync("ExtractorPrompt", ct);
@@ -115,4 +358,19 @@ public class IntentExtractionStep : IChatStep
 
         return template.Replace("{AssetCatalog}", catalog);
     }
+
+    private sealed record FastTurnResult(
+        string Reply,
+        bool IsOnTopic,
+        bool IsComplete,
+        string SuggestedAction,
+        IReadOnlyList<string> SuggestedOptions,
+        ExtractedReportParametersDto Parameters);
+
+    private sealed record LayaAnalysis(
+        FastTurnResult? FastResult,
+        string? LayaIntent,
+        bool? IsRelevant,
+        AssetDto? MatchedAsset,
+        TimeframeResult? ParsedTimeframe);
 }
