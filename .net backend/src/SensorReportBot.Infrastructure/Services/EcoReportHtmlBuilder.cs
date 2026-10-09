@@ -244,12 +244,7 @@ public class EcoReportHtmlBuilder
 
         var bulletPoints = (n.HealthIndexBulletPoints != null && n.HealthIndexBulletPoints.Any())
             ? n.HealthIndexBulletPoints
-            : new List<string>
-            {
-                $"{e.Asset.Name} operates stably within specified limits with an overall health score of {e.HealthScore}/100.",
-                "Thermal monitoring across stator windings and bearings confirms healthy operating margins.",
-                "Shaft train dynamic vibration and acceleration amplitudes demonstrate balanced mechanical alignment."
-            };
+            : new List<string> { "Failed to get inference from LLM." };
 
         foreach (var bp in bulletPoints)
         {

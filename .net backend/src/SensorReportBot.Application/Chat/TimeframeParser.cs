@@ -34,10 +34,10 @@ public static class TimeframeParser
     private static readonly Regex IsoDate = new(@"\b(\d{4}-\d{2}-\d{2})\b", RegexOptions.Compiled);
     private static readonly Regex Yesterday = new(@"\byesterday\b", RegexOptions.Compiled);
     private static readonly Regex DigitUnit = new(
-        @"(?<![\w.:-])(\d+(?:\.\d+)?)\s*(hours?|hrs?|h|days?|d|weeks?|wks?|w|months?|mos?)(?![\w])",
+        @"(?<![\w.:-])(\d+(?:\.\d+)?)\s*(hours?|hrs?|h|days?|d|weeks?|wks?|w|months?|mos?|mon|m)(?![\w])",
         RegexOptions.Compiled);
     private static readonly Regex WordUnit = new(
-        @"\b(" + WordNumbers + @")\s+(hours?|hrs?|days?|weeks?|months?)\b", RegexOptions.Compiled);
+        @"\b(" + WordNumbers + @")\s+(hours?|hrs?|days?|weeks?|months?|mos?|mon|m)\b", RegexOptions.Compiled);
     private static readonly Regex CoupleOf = new(@"\bcouple of (hours?|days?|weeks?)\b", RegexOptions.Compiled);
     private static readonly Regex FewDays = new(@"\b(?:a )?few days\b", RegexOptions.Compiled);
     private static readonly Regex HalfMonth = new(@"\bhalf (?:a |of a )?month\b", RegexOptions.Compiled);

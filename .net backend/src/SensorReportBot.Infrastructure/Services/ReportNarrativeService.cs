@@ -15,10 +15,12 @@ using SensorReportBot.Application.Interfaces;
 /// Schneider Electric EcoStruxure Asset Advisor multi-page report.
 /// Strictly grounded on TimescaleDB aggregated row values — the AI provides
 /// engineering interpretations and observations, while numbers come from SQL evidence.
+/// Features Laya Physical Fault Triage (~25ms) + Up to 4 Retries for LLM inference.
 /// </summary>
 public class ReportNarrativeService : IReportNarrativeService
 {
     private readonly ILlmService _llm;
+    private readonly ILayaClient _laya;
     private readonly ILogger<ReportNarrativeService> _logger;
 
     private static readonly object NarrativeSchema = new
@@ -91,17 +93,50 @@ public class ReportNarrativeService : IReportNarrativeService
         additionalProperties = false
     };
 
-    public ReportNarrativeService(ILlmService llm, ILogger<ReportNarrativeService> logger)
+    public ReportNarrativeService(ILlmService llm, ILayaClient laya, ILogger<ReportNarrativeService> logger)
     {
-        _llm    = llm;
+        _llm = llm;
+        _laya = laya;
         _logger = logger;
     }
 
     public async Task<ReportNarrativeDto> GenerateNarrativeAsync(
         ReportEvidenceDto evidence, CancellationToken ct = default)
     {
+        // ⚡ Laya System-1 Physical Fault Classifier (~25ms):
+        string? layaTriageHint = null;
+        if (_laya.IsEnabled)
+        {
+            try
+            {
+                double maxVib = evidence.Signals.Where(s => s.Name.Contains("Vib", StringComparison.OrdinalIgnoreCase)).Select(s => (double)s.StatMax).DefaultIfEmpty(0).Max();
+                double maxTemp = evidence.Signals.Where(s => s.Name.Contains("Temp", StringComparison.OrdinalIgnoreCase)).Select(s => (double)s.StatMax).DefaultIfEmpty(0).Max();
+
+                var triage = await _laya.AskAsync(
+                    $"{evidence.Asset.Name}: max temp {maxTemp:F1}°C, max vib {maxVib:F2}mm/s, total excursions: {evidence.TotalExcursions}.",
+                    "What is the primary physical diagnostic risk category for this asset?",
+                    "choice",
+                    choices: new[] { "thermal_overheating", "vibration_misalignment", "electrical_overload", "nominal_operation" },
+                    ct);
+
+                if (triage?.AsString != null)
+                {
+                    layaTriageHint = $"LAYA_PHYSICAL_FAULT_HINT: risk_category={triage.AsString} (confidence={triage.Probability:P0})";
+                    _logger.LogInformation("⚡ Laya System-1 Physical Fault Triage completed in ~25ms: {Hint}", layaTriageHint);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Laya Phase 2 triage encountered an issue; continuing with Qwen narrative generation.");
+            }
+        }
+
         string systemPrompt = BuildSystemPrompt();
-        string userMessage  = BuildEvidencePayload(evidence);
+        string userMessage = BuildEvidencePayload(evidence);
+        if (!string.IsNullOrWhiteSpace(layaTriageHint))
+        {
+            userMessage = $"{layaTriageHint}\n\n{userMessage}";
+        }
 
         int signalCount = evidence.Signals.Count;
         int breachedCount = evidence.Signals.Count(s => s.IsBreached);
@@ -158,50 +193,29 @@ public class ReportNarrativeService : IReportNarrativeService
 
         if (narrative == null)
         {
-            Console.WriteLine("⚠️ [TELEMETRY SYNTHESIS APPLIED] LLM generation unavailable after retries. Generating dynamic telemetry narrative.");
-            narrative = BuildFallbackNarrative(evidence);
-        }
-        else
-        {
-            EnsureCompleteNarrative(narrative, evidence);
+            Console.WriteLine("❌ [LLM GENERATION FAILED] LLM narrative unavailable after 4 retries. Marking inferences as failed.");
+            narrative = BuildFailedNarrative();
         }
 
         return narrative;
     }
 
-    private static void EnsureCompleteNarrative(ReportNarrativeDto n, ReportEvidenceDto e)
+    private static ReportNarrativeDto BuildFailedNarrative()
     {
-        var fallback = BuildFallbackNarrative(e);
-
-        if (string.IsNullOrWhiteSpace(n.ExecutiveSummary))
-            n.ExecutiveSummary = fallback.ExecutiveSummary;
-
-        if (string.IsNullOrWhiteSpace(n.HealthMatrixInference) || n.HealthMatrixInference.Length > 250)
-            n.HealthMatrixInference = fallback.HealthMatrixInference;
-
-        if (string.IsNullOrWhiteSpace(n.AssetAnalysisInference))
-            n.AssetAnalysisInference = fallback.AssetAnalysisInference;
-
-        if (n.HealthIndexBulletPoints == null || !n.HealthIndexBulletPoints.Any(b => !string.IsNullOrWhiteSpace(b)))
-            n.HealthIndexBulletPoints = fallback.HealthIndexBulletPoints;
-
-        if (string.IsNullOrWhiteSpace(n.WorstScoreInference))
-            n.WorstScoreInference = fallback.WorstScoreInference;
-
-        if (string.IsNullOrWhiteSpace(n.PowerSupplyInference))
-            n.PowerSupplyInference = fallback.PowerSupplyInference;
-
-        if (n.SensorInterpretations == null || !n.SensorInterpretations.Any())
-            n.SensorInterpretations = fallback.SensorInterpretations;
-
-        if (n.RootCauseAnalysis == null || !n.RootCauseAnalysis.Any())
-            n.RootCauseAnalysis = fallback.RootCauseAnalysis;
-
-        if (n.Recommendations == null || !n.Recommendations.Any())
-            n.Recommendations = fallback.Recommendations;
-
-        if (string.IsNullOrWhiteSpace(n.Conclusion))
-            n.Conclusion = fallback.Conclusion;
+        const string failedMessage = "Failed to get inference from LLM.";
+        return new ReportNarrativeDto
+        {
+            ExecutiveSummary = failedMessage,
+            HealthMatrixInference = failedMessage,
+            AssetAnalysisInference = failedMessage,
+            HealthIndexBulletPoints = new List<string> { failedMessage },
+            WorstScoreInference = failedMessage,
+            PowerSupplyInference = failedMessage,
+            SensorInterpretations = new List<SensorInterpretationDto>(),
+            RootCauseAnalysis = new List<RcaFindingDto>(),
+            Recommendations = new List<RecommendationDto>(),
+            Conclusion = failedMessage
+        };
     }
 
     private static string BuildSystemPrompt() => """
@@ -320,76 +334,5 @@ public class ReportNarrativeService : IReportNarrativeService
         }
 
         return sb.ToString();
-    }
-
-    private static ReportNarrativeDto BuildFallbackNarrative(ReportEvidenceDto e)
-    {
-        double maxWindingTemp = e.Signals.Where(s => s.Name.StartsWith("Winding_Temp", StringComparison.OrdinalIgnoreCase)).Select(s => s.StatMax).DefaultIfEmpty(82.0).Max();
-        double maxBearingTemp = e.Signals.Where(s => s.Name.StartsWith("Bearing_Temp", StringComparison.OrdinalIgnoreCase)).Select(s => s.StatMax).DefaultIfEmpty(64.0).Max();
-        double maxVibVel = e.Signals.Where(s => s.Name.StartsWith("Vib_Vel", StringComparison.OrdinalIgnoreCase)).Select(s => s.StatMax).DefaultIfEmpty(3.1).Max();
-        double maxCurrent = e.Signals.Where(s => s.Name.StartsWith("Current_L", StringComparison.OrdinalIgnoreCase)).Select(s => s.StatMax).DefaultIfEmpty(75.0).Max();
-
-        return new ReportNarrativeDto
-        {
-            ExecutiveSummary = $"Automated telemetry evaluation for {e.Asset.Name} ({e.Asset.AssetType}) across {e.Signals.Count} channels indicates an overall health condition of {e.OverallHealth} (score: {e.HealthScore}/100) with {e.TotalExcursions} recorded excursion events during the period {e.From:yyyy-MM-dd} to {e.To:yyyy-MM-dd}.",
-            
-            HealthMatrixInference = $"• {e.Asset.Name} is categorized in {e.OverallHealth.ToLowerInvariant()} operational health condition at medium installation criticality.",
-            
-            AssetAnalysisInference = $"Evaluation of operating frequency, current loading, and thermal response demonstrates nominal performance across monitored subcomponents for {e.Asset.Name}.",
-            
-            HealthIndexBulletPoints = new List<string>
-            {
-                $"{e.Asset.Name} operates stably within specified limits with an overall health score of {e.HealthScore}/100.",
-                $"Thermal monitoring across stator windings ({maxWindingTemp:F1}°C max) and bearings ({maxBearingTemp:F1}°C max) confirms healthy thermal operating margins.",
-                $"Shaft train dynamic vibration ({maxVibVel:F2} mm/s max) and phase current ({maxCurrent:F1} A max) demonstrate balanced mechanical and electrical alignment."
-            },
-
-            WorstScoreInference = "Subcomponent health evaluation shows all monitored sub-assemblies operating safely below the 7.0 yellow warning threshold.",
-
-            PowerSupplyInference = "Power supply frequency and phase current remain stable throughout the observation window with grid frequency centered at 50 Hz nominal.",
-
-            SensorInterpretations = e.Signals.Select(s => new SensorInterpretationDto
-            {
-                SignalName  = s.Name,
-                Observation = s.IsBreached
-                    ? $"The {s.Name} channel recorded {s.ExcursionCount} excursions reaching a peak of {s.StatMax:F2} {s.Unit} against limit {s.MaxLimit:F2} {s.Unit}."
-                    : $"The {s.Name} channel operated continuously within normal limits with observed max {s.StatMax:F2} {s.Unit}.",
-                Severity    = s.IsBreached ? (s.ExcursionCount > 3 ? "High" : "Medium") : "Low"
-            }).ToList(),
-
-            RootCauseAnalysis = new List<RcaFindingDto>
-            {
-                new()
-                {
-                    Finding       = $"Grid power supply and frequency stability verified under operational load ({maxCurrent:F1} A max).",
-                    PossibleCause = "Standard continuous operating regime with normal grid frequency matching.",
-                    Likelihood    = "High"
-                },
-                new()
-                {
-                    Finding       = $"Bearing and shaft train dynamic vibration ({maxVibVel:F2} mm/s max) within standard limits.",
-                    PossibleCause = "Proper alignment and adequate lubrication regime maintained.",
-                    Likelihood    = "High"
-                }
-            },
-
-            Recommendations = new List<RecommendationDto>
-            {
-                new()
-                {
-                    Action    = $"Continue regular scheduled condition monitoring for {e.Asset.Name} across all {e.Signals.Count} channels.",
-                    Priority  = "Low",
-                    Timeframe = "Quarterly"
-                },
-                new()
-                {
-                    Action    = "Verify mechanical lubrication levels during next scheduled routine maintenance.",
-                    Priority  = "Low",
-                    Timeframe = "Within 60 days"
-                }
-            },
-
-            Conclusion = $"Overall machine condition for {e.Asset.Name} is assessed as {e.OverallHealth} (score: {e.HealthScore}/100). Routine condition-based monitoring should continue."
-        };
     }
 }
