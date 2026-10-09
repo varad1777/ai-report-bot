@@ -1,390 +1,686 @@
 namespace SensorReportBot.Application.Steps;
 
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Net.Http;
-using System.Threading;
-using System.Threading.Tasks;
+
+
+using System.Globalization;
+
 using Microsoft.Extensions.Logging;
-using SensorReportBot.Application.Chat;
+
 using SensorReportBot.Application.DTOs;
-using SensorReportBot.Application.Exceptions;
+
 using SensorReportBot.Application.Interfaces;
+
 using SensorReportBot.Domain.Entities;
 
+
+
 /// <summary>
-/// The hybrid intelligence engine of the pipeline:
-/// 1. Fast-Path (Laya System-1): ~25ms decision model for deterministic, clean inputs (resets, exact buttons, clean asset/time selections).
-/// 2. Deep-Path (Ollama Qwen System-2): Handles conversational nuance, typos ("3.5 dddaysss"), slang, and multi-intent queries.
-/// Laya's extracted hints are ALWAYS passed to Qwen whenever input is conversational or incomplete,
-/// guaranteeing fast pre-digested decisions without false off-topic refusals or accidental resets.
+
+/// Uses Jev as the primary semantic decision engine. The backend owns validated state,
+
+/// report queueing, and response text. Qwen is used only for unbounded period values
+
+/// that cannot be represented by Jev's bounded probability questions.
+
 /// </summary>
-public class IntentExtractionStep : IChatStep
+
+public sealed class IntentExtractionStep(
+
+    IJevDecisionService jev,
+
+    ILlmService llm,
+
+    ITelemetryRepository telemetry,
+
+    IPdfJobQueue pdfJobs,
+
+    ILogger<IntentExtractionStep> logger) : IChatStep
+
 {
-    private readonly ILlmService _llmService;
-    private readonly ILayaClient _layaClient;
-    private readonly IPromptProvider _promptProvider;
-    private readonly ITelemetryRepository _telemetryRepo;
-    private readonly ILogger<IntentExtractionStep> _logger;
 
-    private static readonly HashSet<string> ConfirmWords = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "yes", "yeah", "yep", "sure", "ok", "okay", "confirm", "proceed", "generate", "queue", "queue it", "generate report", "yes please", "do it"
-    };
+    private const double DecisionThreshold = 0.55;
 
-    private static readonly HashSet<string> ResetWords = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "reset", "clear", "cancel", "start over", "reset options", "clear options", "restart"
-    };
+    private const double StrongSelectionThreshold = 0.45;
 
-    private static readonly string[] DefaultTimeframeOptions = new[]
-    {
-        "⚡ Last 24 Hours", "📊 Last 5 Days", "🗓️ Last 2 Weeks", "📈 Last 30 Days", "Custom Calendar Range"
-    };
+    private const double MinimumSelectionThreshold = 0.25;
 
-    public IntentExtractionStep(
-        ILlmService llmService,
-        ILayaClient layaClient,
-        IPromptProvider promptProvider,
-        ITelemetryRepository telemetryRepo,
-        ILogger<IntentExtractionStep> logger)
-    {
-        _llmService = llmService;
-        _layaClient = layaClient;
-        _promptProvider = promptProvider;
-        _telemetryRepo = telemetryRepo;
-        _logger = logger;
-    }
+    private const double SelectionMargin = 0.05;
+
+
+
+    private static readonly IReadOnlyDictionary<string, string> StandardPeriods =
+
+        new Dictionary<string, string>
+
+        {
+
+            ["period_24h"] = "24h",
+
+            ["period_5d"] = "5d",
+
+            ["period_7d"] = "7d",
+
+            ["period_14d"] = "14d",
+
+            ["period_30d"] = "30d",
+
+        };
+
+
 
     public async Task RunAsync(ChatRequestState state, CancellationToken ct)
+
     {
-        var assets = await _telemetryRepo.GetAssetsAsync(ct);
-        string? layaHintNote = null;
 
-        // ── 1. Fast-Path & Hint Extraction (Laya System-1 ~25ms) ──
-        if (_layaClient.IsEnabled)
-        {
-            try
-            {
-                var analysis = await AnalyzeWithLayaAsync(state, assets, ct);
-                if (analysis.FastResult != null)
-                {
-                    state.Reply = analysis.FastResult.Reply;
-                    state.IsOnTopic = analysis.FastResult.IsOnTopic;
-                    state.IsComplete = analysis.FastResult.IsComplete;
-                    state.SuggestedAction = analysis.FastResult.SuggestedAction;
-                    state.SuggestedOptions = analysis.FastResult.SuggestedOptions.ToList();
-                    state.ExtractedParameters = analysis.FastResult.Parameters;
-                    return;
-                }
+        var assets = await telemetry.GetAssetsAsync(ct);
 
-                // Pass Laya's System-1 pre-analysis hints directly into Qwen
-                layaHintNote = BuildLayaHintNote(analysis);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Laya fast-path encountered an issue; falling back to deep LLM.");
-            }
-        }
+        var current = state.PreviousParameters?.Clone() ?? new ExtractedReportParametersDto { Mode = "raw" };
 
-        // ── 2. Deep-Path: Ollama Qwen with Laya hints for reasoning (2-3s) ──
-        string systemPrompt = await BuildSystemPromptAsync(assets, ct);
+        var questions = CreateQuestions(assets);
 
-        var (reply, turn) = await AskAsync(state, systemPrompt, assets, note: layaHintNote, ct);
 
-        // One corrective retry when reply is empty or invented invalid schema parameters.
-        string? problem = string.IsNullOrWhiteSpace(reply?.ReplyMessage)
-            ? "replyMessage was empty. Write a helpful reply."
-            : turn?.Problem;
 
-        if (problem != null)
-        {
-            _logger.LogInformation("Retrying LLM call once. Problem: {Problem}", problem);
-            string retryNote = string.IsNullOrWhiteSpace(layaHintNote) ? problem : $"{layaHintNote} | RETRY_PROBLEM: {problem}";
-            var (retryReply, retryTurn) = await AskAsync(state, systemPrompt, assets, retryNote, ct);
-            if (!string.IsNullOrWhiteSpace(retryReply?.ReplyMessage))
-            {
-                reply = retryReply;
-                turn = retryTurn;
-            }
-        }
+        JevDecisionResult decision;
 
-        if (reply == null || turn == null || string.IsNullOrWhiteSpace(reply.ReplyMessage))
-            throw new LlmUnavailableException("The language model did not return a usable reply.");
-
-        state.Reply = reply.ReplyMessage.Trim();
-        state.IsOnTopic = turn.IsOnTopic;
-        state.IsComplete = turn.IsComplete;
-        state.SuggestedAction = turn.SuggestedAction;
-        state.SuggestedOptions = turn.SuggestedOptions.ToList();
-        state.ExtractedParameters = turn.Parameters;
-    }
-
-    private static string? BuildLayaHintNote(LayaAnalysis analysis)
-    {
-        var parts = new List<string>();
-        if (!string.IsNullOrWhiteSpace(analysis.LayaIntent))
-            parts.Add($"intent={analysis.LayaIntent}");
-        if (analysis.MatchedAsset != null)
-            parts.Add($"matched_asset=\"{analysis.MatchedAsset.Name}\" (id={analysis.MatchedAsset.AssetId})");
-        if (analysis.ParsedTimeframe is { Found: true })
-            parts.Add($"parsed_timeframe=\"{analysis.ParsedTimeframe.TimeRange ?? $"{analysis.ParsedTimeframe.FromDate}..{analysis.ParsedTimeframe.ToDate}"}\"");
-        if (analysis.IsRelevant.HasValue)
-            parts.Add($"relevance={(analysis.IsRelevant.Value ? "on_topic" : "off_topic")}");
-
-        return parts.Count > 0 ? "LAYA_PREANALYSIS: " + string.Join(" | ", parts) : null;
-    }
-
-    private async Task<LayaAnalysis> AnalyzeWithLayaAsync(
-        ChatRequestState state,
-        IReadOnlyList<AssetDto> assets,
-        CancellationToken ct)
-    {
-        string userMsg = state.UserMessage?.Trim() ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(userMsg))
-            return new LayaAnalysis(null, null, null, null, null);
-
-        var prevParams = state.PreviousParameters?.Clone() ?? new ExtractedReportParametersDto();
-
-        // ── 1. Deterministic Reset / Clear Request (C# Exact Match) ──
-        if (IsResetRequest(userMsg))
-        {
-            var emptyParams = new ExtractedReportParametersDto();
-            var fast = new FastTurnResult(
-                Reply: "I have cleared the current report options. Which asset from the catalog would you like to examine?",
-                IsOnTopic: true,
-                IsComplete: false,
-                SuggestedAction: SuggestedActions.SelectAsset,
-                SuggestedOptions: assets.Select(a => a.Name).ToList(),
-                Parameters: emptyParams
-            );
-            return new LayaAnalysis(fast, "reset_options", true, null, null);
-        }
-
-        // ── 2. Deterministic Confirm Queue when already complete (C# Exact Match) ──
-        if (prevParams.HasAsset && prevParams.HasTime && IsConfirmation(userMsg))
-        {
-            var fast = new FastTurnResult(
-                Reply: $"Understood. I am queueing the telemetry report generation for {prevParams.AssetName} ({prevParams.TimeRange ?? $"{prevParams.FromDate} to {prevParams.ToDate}"}).",
-                IsOnTopic: true,
-                IsComplete: true,
-                SuggestedAction: SuggestedActions.ConfirmQueue,
-                SuggestedOptions: new[] { "Yes", "Change Options" },
-                Parameters: prevParams
-            );
-            return new LayaAnalysis(fast, "confirm_queue", true, null, null);
-        }
-
-        // ── 3. Asset & Timeframe Matching via C# Engine ──
-        var assetMatch = AssetMatcher.Match(userMsg, assets);
-        var matchedAsset = assetMatch.Asset;
-        var timeResult = TimeframeParser.Parse(userMsg, allowBareNumber: true, utcNow: DateTime.UtcNow);
-        bool hasConversationalNuance = IsConversationalNuance(userMsg);
-
-        // Clean direct match for both asset and timeframe (no ambiguity, no conversational nuance)
-        if (matchedAsset != null && timeResult.Found && !hasConversationalNuance)
-        {
-            var targetParams = new ExtractedReportParametersDto
-            {
-                AssetId = matchedAsset.AssetId,
-                AssetName = matchedAsset.Name,
-                TimeRange = timeResult.TimeRange,
-                FromDate = timeResult.FromDate,
-                ToDate = timeResult.ToDate,
-                Mode = "raw"
-            };
-
-            var fast = new FastTurnResult(
-                Reply: $"I have configured the telemetry report for {targetParams.AssetName} covering {targetParams.TimeRange ?? $"{targetParams.FromDate} to {targetParams.ToDate}"}. Would you like me to generate this report?",
-                IsOnTopic: true,
-                IsComplete: true,
-                SuggestedAction: SuggestedActions.ConfirmQueue,
-                SuggestedOptions: new[] { "Yes", "Change Options" },
-                Parameters: targetParams
-            );
-            return new LayaAnalysis(fast, "configure_report", true, matchedAsset, timeResult);
-        }
-
-        // Clean direct asset match without timeframe (and no conversational questions)
-        if (matchedAsset != null && !timeResult.Found && !hasConversationalNuance && !prevParams.HasTime)
-        {
-            var targetParams = new ExtractedReportParametersDto
-            {
-                AssetId = matchedAsset.AssetId,
-                AssetName = matchedAsset.Name,
-                Mode = "raw"
-            };
-
-            var fast = new FastTurnResult(
-                Reply: $"Great! I can help you configure a report for the {targetParams.AssetName}. Could you please specify the timeframe you're interested in?",
-                IsOnTopic: true,
-                IsComplete: false,
-                SuggestedAction: SuggestedActions.SelectTimeframe,
-                SuggestedOptions: DefaultTimeframeOptions,
-                Parameters: targetParams
-            );
-            return new LayaAnalysis(fast, "configure_report", true, matchedAsset, null);
-        }
-
-        // Clean direct timeframe answer when asset is already selected
-        if (prevParams.HasAsset && !prevParams.HasTime && timeResult.Found && !hasConversationalNuance)
-        {
-            prevParams.TimeRange = timeResult.TimeRange;
-            prevParams.FromDate = timeResult.FromDate;
-            prevParams.ToDate = timeResult.ToDate;
-
-            var fast = new FastTurnResult(
-                Reply: $"I have configured the telemetry report for {prevParams.AssetName} covering {prevParams.TimeRange ?? $"{prevParams.FromDate} to {prevParams.ToDate}"}. Would you like me to generate this report?",
-                IsOnTopic: true,
-                IsComplete: true,
-                SuggestedAction: SuggestedActions.ConfirmQueue,
-                SuggestedOptions: new[] { "Yes", "Change Options" },
-                Parameters: prevParams
-            );
-            return new LayaAnalysis(fast, "configure_report", true, null, timeResult);
-        }
-
-        // ── 4. Laya System-1 Fast Classification (for hints) ──
-        var intentRes = await _layaClient.AskAsync(
-            userMsg,
-            "What is the user trying to do?",
-            "choice",
-            choices: new[] { "greeting", "reset_options", "confirm_queue", "configure_report", "general_question" },
-            ct);
-
-        string intent = intentRes?.AsString?.ToLowerInvariant() ?? "general_question";
-
-        // Clean greeting fast-path (only when no asset is selected yet)
-        if (intent == "greeting" && !prevParams.HasAsset && !hasConversationalNuance)
-        {
-            var fast = new FastTurnResult(
-                Reply: "Hello! I am SensorBot, your industrial telemetry and EcoStruxure report assistant. Which machine or equipment would you like to examine?",
-                IsOnTopic: true,
-                IsComplete: false,
-                SuggestedAction: SuggestedActions.SelectAsset,
-                SuggestedOptions: assets.Select(a => a.Name).ToList(),
-                Parameters: prevParams
-            );
-            return new LayaAnalysis(fast, intent, true, null, null);
-        }
-
-        // ── 5. Relevance Guardrail ──
-        // CRITICAL FIX: If an asset is already selected (in-progress workflow), NEVER flag timeframe or follow-up answers as off-topic!
-        bool isRelevant = true;
-        if (!prevParams.HasAsset && !prevParams.HasTime)
-        {
-            var topicRes = await _layaClient.AskAsync(
-                userMsg,
-                "Is this message relevant to industrial plant machinery, sensors, telemetry, equipment monitoring, or report generation?",
-                "noul",
-                choices: null,
-                ct);
-
-            isRelevant = topicRes?.AsBoolean ?? true;
-        }
-
-        if (!isRelevant)
-        {
-            _logger.LogInformation("Laya filtered out off-topic message '{UserMsg}' - skipping System-2 LLM execution.", userMsg);
-            var fast = new FastTurnResult(
-                Reply: "I am SensorBot, dedicated exclusively to industrial plant equipment, sensor telemetry, and report generation. Please ask about plant machinery or select an asset from the catalog.",
-                IsOnTopic: false,
-                IsComplete: prevParams.HasAsset && prevParams.HasTime,
-                SuggestedAction: !prevParams.HasAsset ? SuggestedActions.SelectAsset : (prevParams.HasTime ? SuggestedActions.ConfirmQueue : SuggestedActions.SelectTimeframe),
-                SuggestedOptions: !prevParams.HasAsset ? assets.Select(a => a.Name).ToList() : DefaultTimeframeOptions,
-                Parameters: prevParams
-            );
-            return new LayaAnalysis(fast, intent, false, matchedAsset, timeResult);
-        }
-
-        // ── 6. Pass Insights to Qwen (System-2 Deep Reasoning) ──
-        // For conversational inputs, typos ("3.5 dddaysss"), slang, or multi-intent questions:
-        // Forward Laya's extracted signals to Qwen so Qwen resolves it with 100% precision.
-        _logger.LogInformation("Laya passing request to full LLM reasoning (intent: {Intent}, asset: {Asset}, time: {Time}, isRelevant: {IsRelevant}).",
-            intent, matchedAsset?.Name, timeResult?.TimeRange, isRelevant);
-
-        return new LayaAnalysis(null, intent, isRelevant, matchedAsset, timeResult);
-    }
-
-    private static bool IsResetRequest(string message)
-    {
-        if (string.IsNullOrWhiteSpace(message)) return false;
-        string trimmed = message.Trim().TrimEnd('.', '!', '?');
-        return ResetWords.Contains(trimmed);
-    }
-
-    private static bool IsConversationalNuance(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return false;
-        if (text.Contains('?')) return true;
-
-        string lower = text.ToLowerInvariant();
-        return lower.Contains("will it") || lower.Contains("is it") || lower.Contains("can we")
-            || lower.Contains("can you") || lower.Contains("ok") || lower.Contains("okay")
-            || lower.Contains("fine") || lower.Contains("possible") || lower.Contains("should")
-            || lower.Contains("what about") || lower.Contains("how about") || lower.Contains("bhai")
-            || lower.Contains("bro") || lower.Contains("please") || lower.Contains("just");
-    }
-
-    private static bool IsConfirmation(string message)
-    {
-        if (string.IsNullOrWhiteSpace(message)) return false;
-        string trimmed = message.Trim().TrimEnd('.', '!', '?');
-        return ConfirmWords.Contains(trimmed);
-    }
-
-    private async Task<(LlmChatReplyDto? Reply, SyncedTurn? Turn)> AskAsync(
-        ChatRequestState state,
-        string systemPrompt,
-        IReadOnlyList<AssetDto> assets,
-        string? note,
-        CancellationToken ct)
-    {
-        string userPrompt = PromptContextBuilder.Build(
-            state.UserMessage, state.PreviousParameters, state.History, DateTime.UtcNow, note);
-
-        LlmChatReplyDto? reply;
         try
+
         {
-            reply = await _llmService.GenerateJsonResponseAsync<LlmChatReplyDto>(
-                systemPrompt, userPrompt, ct, ChatReplySchema.Value);
-        }
-        catch (HttpRequestException ex)
-        {
-            throw new LlmUnavailableException("The language model endpoint is not reachable.", ex);
-        }
-        catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
-        {
-            throw new LlmUnavailableException("The language model timed out.", ex);
+
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+
+            deadline.CancelAfter(TimeSpan.FromSeconds(6));
+
+            decision = await jev.DecideAsync(new
+
+            {
+
+                message = state.UserMessage,
+
+                conversationStage = CurrentStage(current),
+
+                supportedTask = "Configure and queue industrial asset telemetry PDF reports."
+
+            }, questions, deadline.Token);
+
+            state.InputTokens = decision.InputTokens;
+
+            state.OutputTokens = 0;
+
+            state.TotalTokens = decision.InputTokens;
+
+            state.DecisionModel = "jevos-v4/openvino-int8";
+
         }
 
-        if (reply == null) return (null, null);
-        return (reply, ChatResponseSynchronizer.Sync(reply, state.PreviousParameters, assets));
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+
+        {
+
+            logger.LogWarning(ex, "Jev decision failed; using compact Qwen fallback.");
+
+            await ResolveWithQwenAsync(state, current, assets, ct);
+
+            return;
+
+        }
+
+
+
+        double P(string key) => decision.Probabilities.TryGetValue(key, out var value) ? value : 0;
+
+
+
+        if (P("off_topic") >= DecisionThreshold && P("off_topic") > P("report"))
+        {
+            state.IsOnTopic = false;
+            state.IsComplete = false;
+            state.ExtractedParameters = state.PreviousParameters?.Clone();
+            state.SuggestedAction = "none";
+            state.SuggestedOptions = new();
+            state.Reply = "I can help with industrial asset telemetry reports.";
+            return;
+        }
+
+        if (P("cancel") >= DecisionThreshold)
+
+        {
+
+            SetSelectionRequest(state, new ExtractedReportParametersDto { Mode = "raw" }, assets,
+
+                "Report selection cleared. Which machine or asset would you like a report for?");
+
+            return;
+
+        }
+
+
+
+        var assetChoices = assets
+            .Select(asset => new { Asset = asset, Probability = P($"asset_{asset.AssetId}") })
+            .OrderByDescending(item => item.Probability)
+            .ToList();
+        var assetChoice = assetChoices.FirstOrDefault();
+        double assetMargin = assetChoice is null ? 0 :
+            assetChoice.Probability - (assetChoices.Count > 1 ? assetChoices[1].Probability : 0);
+        bool assetConfident = assetChoice is not null && IsConfident(assetChoice.Probability, assetMargin);
+
+        if (assetConfident)
+
+        {
+
+            current.AssetId = assetChoice!.Asset.AssetId;
+
+            current.AssetName = assetChoice.Asset.Name;
+
+        }
+
+
+
+        var periodChoices = StandardPeriods
+            .Select(item => new { item.Key, Value = item.Value, Probability = P(item.Key) })
+            .OrderByDescending(item => item.Probability)
+            .ToList();
+        var periodChoice = periodChoices[0];
+        double periodMargin = periodChoice.Probability - periodChoices[1].Probability;
+        bool periodConfident = IsConfident(periodChoice.Probability, periodMargin);
+
+        if (periodConfident)
+
+        {
+
+            current.TimeRange = periodChoice.Value;
+
+            current.FromDate = null;
+
+            current.ToDate = null;
+
+        }
+
+
+
+        bool reportRelated = P("report") >= DecisionThreshold ||
+
+            P("confirm") >= DecisionThreshold ||
+
+            P("change_period") >= 0.30 || P("change_asset") >= 0.15 || assetConfident ||
+
+            periodConfident || P("report") >= 0.30;
+
+
+
+        if (!reportRelated)
+
+        {
+
+            state.IsOnTopic = false;
+
+            state.IsComplete = false;
+
+            state.ExtractedParameters = state.PreviousParameters?.Clone();
+
+            state.SuggestedAction = "none";
+
+            state.SuggestedOptions = new();
+
+            state.Reply = "I can help with industrial asset telemetry reports.";
+
+            return;
+
+        }
+
+
+
+        bool needsUnboundedPeriod = P("change_period") >= DecisionThreshold &&
+            !periodConfident;
+        bool unresolvedAsset = current.AssetId is null && P("report") >= 0.30 && !assetConfident;
+        bool ambiguousAssetChange = P("change_asset") >= 0.15 &&
+            !assetConfident;
+
+        bool ambiguousContinuation = current.AssetId is > 0 && HasPeriod(current) &&
+            P("report") >= DecisionThreshold && P("confirm") < DecisionThreshold &&
+            !assetConfident && !periodConfident &&
+            P("change_asset") >= 0.15;
+
+        if (needsUnboundedPeriod || unresolvedAsset || ambiguousAssetChange || ambiguousContinuation)
+
+        {
+
+            await ResolveWithQwenAsync(state, current, assets, ct);
+
+            return;
+
+        }
+
+
+
+        if (P("confirm") >= DecisionThreshold && P("change_period") < DecisionThreshold &&
+            !periodConfident && current.AssetId is > 0 && HasPeriod(current))
+
+        {
+
+            await QueueAsync(state, current, ct);
+
+            return;
+
+        }
+
+
+
+        if (current.AssetId is null || current.AssetId <= 0)
+
+        {
+
+            SetSelectionRequest(state, current, assets,
+
+                "Which machine or asset would you like a report for?");
+
+            return;
+
+        }
+
+
+
+        if (!HasPeriod(current) || P("change_period") >= DecisionThreshold && !periodConfident)
+
+        {
+
+            state.IsOnTopic = true;
+
+            state.IsComplete = false;
+
+            state.ExtractedParameters = current;
+
+            state.SuggestedAction = "select_timeframe";
+
+            state.SuggestedOptions = StandardPeriods.Values.ToList();
+
+            state.Reply = $"What reporting period should I use for {current.AssetName}?";
+
+            return;
+
+        }
+
+
+
+        state.IsOnTopic = true;
+
+        state.IsComplete = true;
+
+        state.ExtractedParameters = current;
+
+        state.SuggestedAction = "confirm_queue";
+
+        state.SuggestedOptions = new() { "Yes, Queue PDF Report", "Change Options" };
+
+        state.Reply = $"Report configured for {current.AssetName} covering {PeriodLabel(current)}. Generate the PDF now?";
+
     }
 
-    private async Task<string> BuildSystemPromptAsync(IReadOnlyList<AssetDto> assets, CancellationToken ct)
+
+
+    private static Dictionary<string, string> CreateQuestions(IEnumerable<AssetDto> assets)
+
     {
-        string template = await _promptProvider.GetPromptAsync("ExtractorPrompt", ct);
-        string catalog = assets.Count == 0
-            ? "(none)"
-            : string.Join(" | ", assets.Select(a => $"{a.AssetId}: {a.Name}"));
 
-        return template.Replace("{AssetCatalog}", catalog);
+        var questions = new Dictionary<string, string>
+
+        {
+
+            ["report"] = "Is the user asking for, configuring, changing, or discussing an industrial telemetry PDF report?",
+            ["off_topic"] = "Is the message unrelated to industrial assets, telemetry, maintenance, reports, or the current report conversation?",
+
+
+            ["confirm"] = "Is the user confirming that the configured PDF report should be generated or queued now?",
+
+            ["cancel"] = "Is the user cancelling, clearing, resetting, or abandoning the current report selection?",
+            ["change_asset"] = "Is the user selecting a different machine or changing the current asset?",
+
+
+            ["change_period"] = "Is the user selecting or changing the reporting duration or date range?",
+
+            ["period_24h"] = "Does the latest user message request a one-day, daily, yesterday, today, or 24-hour period? Ignore currentState when answering.",
+
+            ["period_5d"] = "Does the latest user message request a five-day period? Ignore currentState when answering.",
+
+            ["period_7d"] = "Does the latest user message request a seven-day, one-week, or weekly period? Ignore currentState when answering.",
+
+            ["period_14d"] = "Does the latest user message request a fourteen-day, two-week, or fortnight period? Ignore currentState when answering.",
+
+            ["period_30d"] = "Does the latest user message request a thirty-day, one-month, or monthly period? Ignore currentState when answering.",
+
+        };
+
+        foreach (var asset in assets)
+
+            questions[$"asset_{asset.AssetId}"] = $"Does the latest user message name the monitored asset '{asset.Name}', including abbreviations or spelling mistakes? Ignore currentState when answering.";
+
+        return questions;
+
     }
 
-    private sealed record FastTurnResult(
-        string Reply,
-        bool IsOnTopic,
-        bool IsComplete,
-        string SuggestedAction,
-        IReadOnlyList<string> SuggestedOptions,
-        ExtractedReportParametersDto Parameters);
+    private static bool IsConfident(double probability, double margin) =>
+        probability >= StrongSelectionThreshold ||
+        probability >= MinimumSelectionThreshold && margin >= SelectionMargin;
 
-    private sealed record LayaAnalysis(
-        FastTurnResult? FastResult,
-        string? LayaIntent,
-        bool? IsRelevant,
-        AssetDto? MatchedAsset,
-        TimeframeResult? ParsedTimeframe);
+
+
+    private async Task ResolveWithQwenAsync(
+
+        ChatRequestState state,
+
+        ExtractedReportParametersDto current,
+
+        IReadOnlyList<AssetDto> assets,
+
+        CancellationToken ct)
+
+    {
+
+        const string systemPrompt = """
+            Extract a telemetry report request and correct spelling mistakes.
+            Return exactly one JSON object with these keys:
+            {"isOnTopic":true,"assetId":null,"assetName":null,"timeRange":null,"fromDate":null,"toDate":null}
+            isOnTopic MUST be true when the message requests a report, names or changes an
+            available asset, selects a time period, confirms generation, or asks which assets
+            are available. It is false only for unrelated subjects. Replace the null asset
+            fields only when a listed asset is identified, and copy the exact assetId and
+            assetName from availableAssets. Preserve currentState values unless the message
+            changes them. Normalize durations to Nh or Nd; for example, five days is 5d,
+            48 hours is 48h, two weeks is 14d, and monthly is 30d. Keep fromDate and toDate
+            null unless the user provides explicit calendar dates. When the user asks which
+            assets are available without naming one, keep assetId and assetName null; never
+            choose the first available asset as a default.
+            """;
+
+        string context = System.Text.Json.JsonSerializer.Serialize(new
+
+        {
+
+            message = state.UserMessage,
+
+            currentState = current,
+
+            availableAssets = assets.Select(asset => new { asset.AssetId, asset.Name }),
+
+            utcDate = DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+
+        });
+
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+
+        deadline.CancelAfter(TimeSpan.FromSeconds(25));
+
+        var result = await llm.GenerateJsonResponseAsync<FallbackExtraction>(systemPrompt, context, deadline.Token);
+
+        state.DecisionModel = "qwen2.5:1.5b-fallback";
+
+        if (result is null)
+
+        {
+
+            state.IsOnTopic = true;
+
+            state.IsComplete = false;
+
+            state.ExtractedParameters = current;
+
+            state.SuggestedAction = current.AssetId is > 0 ? "select_timeframe" : "select_asset";
+
+            state.SuggestedOptions = current.AssetId is > 0
+
+                ? StandardPeriods.Values.ToList()
+
+                : assets.Select(asset => asset.Name).ToList();
+
+            state.Reply = current.AssetId is > 0
+
+                ? $"What reporting period should I use for {current.AssetName}?"
+
+                : "Which machine or asset would you like a report for?";
+
+            return;
+
+        }
+
+
+
+        if (!result.IsOnTopic)
+        {
+            state.IsOnTopic = false;
+            state.IsComplete = false;
+            state.ExtractedParameters = state.PreviousParameters?.Clone();
+            state.SuggestedAction = "none";
+            state.SuggestedOptions = new();
+            state.Reply = "I can help with industrial asset telemetry reports.";
+            return;
+        }
+
+        var extracted = result;
+
+        var selected = assets.FirstOrDefault(asset => asset.AssetId == extracted.AssetId) ??
+
+            assets.FirstOrDefault(asset => string.Equals(asset.Name, extracted.AssetName, StringComparison.OrdinalIgnoreCase));
+
+        if (selected is not null)
+
+        {
+
+            current.AssetId = selected.AssetId;
+
+            current.AssetName = selected.Name;
+
+        }
+
+        if (!string.IsNullOrWhiteSpace(extracted.TimeRange))
+
+        {
+
+            current.TimeRange = extracted.TimeRange;
+
+            current.FromDate = current.ToDate = null;
+
+        }
+
+        if (!string.IsNullOrWhiteSpace(extracted.FromDate)) current.FromDate = extracted.FromDate;
+
+        if (!string.IsNullOrWhiteSpace(extracted.ToDate)) current.ToDate = extracted.ToDate;
+
+
+
+        state.IsOnTopic = true;
+
+        state.IsComplete = current.AssetId is > 0 && HasPeriod(current);
+
+        state.ExtractedParameters = current;
+
+        state.SuggestedAction = state.IsComplete ? "confirm_queue" : current.AssetId is > 0 ? "select_timeframe" : "select_asset";
+
+        state.SuggestedOptions = state.IsComplete
+
+            ? new() { "Yes, Queue PDF Report", "Change Options" }
+
+            : current.AssetId is > 0 ? StandardPeriods.Values.ToList() : assets.Select(asset => asset.Name).ToList();
+
+        state.Reply = state.IsComplete
+
+            ? $"Report configured for {current.AssetName} covering {PeriodLabel(current)}. Generate the PDF now?"
+
+            : current.AssetId is > 0
+                ? $"What reporting period should I use for {current.AssetName}?"
+                : "Which machine or asset would you like a report for?";
+
+    }
+
+
+
+    private async Task QueueAsync(ChatRequestState state, ExtractedReportParametersDto current, CancellationToken ct)
+
+    {
+
+        DateTime to = DateTime.UtcNow;
+
+        DateTime from;
+
+        if (DateTimeOffset.TryParse(current.FromDate, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsedFrom))
+
+        {
+
+            from = parsedFrom.UtcDateTime;
+
+            if (DateTimeOffset.TryParse(current.ToDate, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsedTo))
+
+                to = parsedTo.UtcDateTime;
+
+        }
+
+        else if (!TryResolveDuration(current.TimeRange, to, out from))
+
+        {
+
+            state.IsOnTopic = true;
+
+            state.IsComplete = false;
+
+            state.ExtractedParameters = current;
+
+            state.SuggestedAction = "select_timeframe";
+
+            state.SuggestedOptions = StandardPeriods.Values.ToList();
+
+            state.Reply = "Please provide a valid reporting period.";
+
+            return;
+
+        }
+
+
+
+        var signals = await telemetry.GetSignalsByAssetAsync(current.AssetId!.Value, ct);
+
+        var request = new ReportRequestDto
+
+        {
+
+            AssetId = current.AssetId.Value,
+
+            SignalIds = current.SignalIds is { Count: > 0 } ? current.SignalIds : signals.Take(6).Select(item => item.SignalId).ToList(),
+
+            From = from,
+
+            To = to,
+
+            IncludeEvents = true,
+
+            IncludeAlerts = true,
+
+            IncludeInsights = true,
+
+            IncludeCharts = true,
+
+            IncludeFullRawData = true,
+
+        };
+
+        var job = await pdfJobs.EnqueueAsync(request, current.AssetName ?? $"Asset-{current.AssetId}", ct);
+
+        state.IsOnTopic = true;
+
+        state.IsComplete = true;
+
+        state.JobId = job.Id;
+
+        state.ExtractedParameters = current;
+
+        state.SuggestedAction = "confirm_queue";
+
+        state.SuggestedOptions = new() { "Change Options" };
+
+        state.Reply = $"Report for {current.AssetName} covering {PeriodLabel(current)} was queued as REP-{job.Id.ToString()[..8].ToUpperInvariant()}.";
+
+    }
+
+
+
+    private static bool TryResolveDuration(string? value, DateTime to, out DateTime from)
+
+    {
+
+        from = default;
+
+        if (string.IsNullOrWhiteSpace(value) || value.Length < 2) return false;
+
+        string number = value[..^1];
+
+        if (!int.TryParse(number, NumberStyles.None, CultureInfo.InvariantCulture, out int count) || count <= 0) return false;
+
+        char unit = char.ToLowerInvariant(value[^1]);
+
+        if (unit == 'h') { from = to.AddHours(-count); return true; }
+
+        if (unit == 'd') { from = to.AddDays(-count); return true; }
+
+        return false;
+
+    }
+
+
+
+    private static bool HasPeriod(ExtractedReportParametersDto state) =>
+
+        !string.IsNullOrWhiteSpace(state.TimeRange) || !string.IsNullOrWhiteSpace(state.FromDate);
+
+
+
+    private static string CurrentStage(ExtractedReportParametersDto state) =>
+
+        state.AssetId is null ? "select_asset" : !HasPeriod(state) ? "select_timeframe" : "confirm_queue";
+
+
+
+    private static string PeriodLabel(ExtractedReportParametersDto state) =>
+
+        !string.IsNullOrWhiteSpace(state.TimeRange) ? state.TimeRange :
+
+        !string.IsNullOrWhiteSpace(state.ToDate) ? $"{state.FromDate} to {state.ToDate}" : state.FromDate ?? "the selected period";
+
+
+
+    private static void SetSelectionRequest(
+
+        ChatRequestState state,
+
+        ExtractedReportParametersDto parameters,
+
+        IEnumerable<AssetDto> assets,
+
+        string reply)
+
+    {
+
+        state.IsOnTopic = true;
+
+        state.IsComplete = false;
+
+        state.ExtractedParameters = parameters;
+
+        state.SuggestedAction = "select_asset";
+
+        state.SuggestedOptions = assets.Select(asset => asset.Name).ToList();
+
+        state.Reply = reply;
+
+    }
+
+    private sealed class FallbackExtraction
+    {
+        public bool IsOnTopic { get; set; }
+        public int? AssetId { get; set; }
+        public string? AssetName { get; set; }
+        public string? TimeRange { get; set; }
+        public string? FromDate { get; set; }
+        public string? ToDate { get; set; }
+    }
+
 }
+
+

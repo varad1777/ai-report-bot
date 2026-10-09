@@ -29,7 +29,14 @@ public class ChatService : IChatService
     public async Task<ConversationalChatResultDto> ProcessChatMessageAsync(string sessionId, string userMessage, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(userMessage))
-            throw new ArgumentException("Message must not be empty.", nameof(userMessage));
+        {
+            return new ConversationalChatResultDto
+            {
+                IsOnTopic = false,
+                IsComplete = false,
+                ReplyMessage = "Please provide a valid question or request regarding sensor reports."
+            };
+        }
 
         var state = new ChatRequestState
         {
@@ -39,24 +46,34 @@ public class ChatService : IChatService
 
         try
         {
-            // LoadHistoryStep -> IntentExtractionStep (single LLM call) -> SaveUserMessageStep -> PersistAssistantReplyStep
+            // Execute full ChatWorkflow Pipeline (GuardStep -> SaveUserMessageStep -> LoadHistoryStep -> IntentExtractionStep -> PersistAssistantReplyStep)
             await _chatWorkflow.ExecuteAsync(state, ct);
+
+            return new ConversationalChatResultDto
+            {
+                IsOnTopic = state.IsOnTopic,
+                IsComplete = state.IsComplete,
+                ReplyMessage = state.Reply ?? "I can help with your sensor report. Which asset and timeframe would you like?",
+                ExtractedParameters = state.ExtractedParameters,
+                SuggestedAction = state.SuggestedAction,
+                SuggestedOptions = state.SuggestedOptions,
+                JobId = state.JobId,
+                InputTokens = state.InputTokens,
+                OutputTokens = state.OutputTokens,
+                TotalTokens = state.TotalTokens,
+                DecisionModel = state.DecisionModel
+            };
         }
         catch (Exception ex)
         {
-            // No canned chatbot answer: let the caller (SignalR hub) report the failure.
-            _logger.LogError(ex, "Chat pipeline failed for session {SessionId}", sessionId);
-            throw;
+            _logger.LogError(ex, "Error processing ChatWorkflow pipeline for session {SessionId}", sessionId);
         }
 
         return new ConversationalChatResultDto
         {
-            IsOnTopic = state.IsOnTopic,
-            IsComplete = state.IsComplete,
-            ReplyMessage = state.Reply!, // guaranteed by IntentExtractionStep (it throws otherwise)
-            ExtractedParameters = state.ExtractedParameters,
-            SuggestedAction = state.SuggestedAction,
-            SuggestedOptions = state.SuggestedOptions
+            IsOnTopic = false,
+            IsComplete = false,
+            ReplyMessage = "I encountered an issue processing your prompt. Please ask about sensor reports or specify target asset parameters."
         };
     }
 

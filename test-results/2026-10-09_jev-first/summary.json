@@ -1,0 +1,249 @@
+{
+  "startedAtIst": "2026-10-09T18:02:28.837+05:30",
+  "completedAtIst": "2026-10-09T18:04:19.427+05:30",
+  "total": 25,
+  "passed": 19,
+  "failed": 6,
+  "failedCases": [
+    "switch-2",
+    "switch-3",
+    "catalog",
+    "conveyor-oneshot",
+    "crusher-arbitrary",
+    "offtopic"
+  ],
+  "latency": {
+    "min": 1.22,
+    "average": 4.1037,
+    "p50": 1.6381,
+    "p95": 10.149,
+    "max": 10.994
+  },
+  "tokens": {
+    "input": 12710,
+    "output": 0,
+    "total": 12710
+  },
+  "models": {
+    "jevos-v4/openvino-int8": 17,
+    "qwen2.5:1.5b-fallback": 8
+  },
+  "resourceSnapshots": [
+    {
+      "label": "baseline",
+      "timestampIst": "2026-10-09T18:02:31.092+05:30",
+      "containers": [
+        {
+          "BlockIO": "50.2MB / 0B",
+          "CPUPerc": "40.28%",
+          "Container": "sensorbot5_backend",
+          "ID": "9d2f235e7b99",
+          "MemPerc": "0.67%",
+          "MemUsage": "79.61MiB / 11.53GiB",
+          "Name": "sensorbot5_backend",
+          "NetIO": "2.07kB / 1.82kB",
+          "PIDs": "33"
+        },
+        {
+          "BlockIO": "5.01GB / 664MB",
+          "CPUPerc": "0.00%",
+          "Container": "sensorbot5_jev",
+          "ID": "067b63a9c12b",
+          "MemPerc": "26.30%",
+          "MemUsage": "3.031GiB / 11.53GiB",
+          "Name": "sensorbot5_jev",
+          "NetIO": "699kB / 307kB",
+          "PIDs": "21"
+        },
+        {
+          "BlockIO": "3.38GB / 991MB",
+          "CPUPerc": "0.01%",
+          "Container": "sensorbot5_ollama",
+          "ID": "f0698dfaa9a6",
+          "MemPerc": "10.95%",
+          "MemUsage": "1.262GiB / 11.53GiB",
+          "Name": "sensorbot5_ollama",
+          "NetIO": "1.07GB / 24.8MB",
+          "PIDs": "49"
+        },
+        {
+          "BlockIO": "1.73GB / 14.1GB",
+          "CPUPerc": "0.00%",
+          "Container": "sensorbot5_timescaledb",
+          "ID": "873cfa521aae",
+          "MemPerc": "26.05%",
+          "MemUsage": "3.003GiB / 11.53GiB",
+          "Name": "sensorbot5_timescaledb",
+          "NetIO": "937MB / 14.6MB",
+          "PIDs": "9"
+        },
+        {
+          "BlockIO": "199MB / 38.7MB",
+          "CPUPerc": "0.53%",
+          "Container": "sensorbot5_rabbitmq",
+          "ID": "0b217a2839ad",
+          "MemPerc": "0.96%",
+          "MemUsage": "113.1MiB / 11.53GiB",
+          "Name": "sensorbot5_rabbitmq",
+          "NetIO": "836kB / 421kB",
+          "PIDs": "56"
+        },
+        {
+          "BlockIO": "209kB / 5.62MB",
+          "CPUPerc": "0.00%",
+          "Container": "sensorbot5_frontend",
+          "ID": "ead915b6e67c",
+          "MemPerc": "0.06%",
+          "MemUsage": "7.516MiB / 11.53GiB",
+          "Name": "sensorbot5_frontend",
+          "NetIO": "6.74kB / 1.01kB",
+          "PIDs": "17"
+        }
+      ]
+    },
+    {
+      "label": "after-functional",
+      "timestampIst": "2026-10-09T18:04:02.828+05:30",
+      "containers": [
+        {
+          "BlockIO": "117MB / 2.15MB",
+          "CPUPerc": "0.56%",
+          "Container": "sensorbot5_backend",
+          "ID": "9d2f235e7b99",
+          "MemPerc": "2.04%",
+          "MemUsage": "240.3MiB / 11.53GiB",
+          "Name": "sensorbot5_backend",
+          "NetIO": "2.73MB / 187kB",
+          "PIDs": "36"
+        },
+        {
+          "BlockIO": "5.6GB / 664MB",
+          "CPUPerc": "0.31%",
+          "Container": "sensorbot5_jev",
+          "ID": "067b63a9c12b",
+          "MemPerc": "26.81%",
+          "MemUsage": "3.091GiB / 11.53GiB",
+          "Name": "sensorbot5_jev",
+          "NetIO": "747kB / 327kB",
+          "PIDs": "21"
+        },
+        {
+          "BlockIO": "3.39GB / 991MB",
+          "CPUPerc": "9.05%",
+          "Container": "sensorbot5_ollama",
+          "ID": "f0698dfaa9a6",
+          "MemPerc": "11.09%",
+          "MemUsage": "1.278GiB / 11.53GiB",
+          "Name": "sensorbot5_ollama",
+          "NetIO": "1.07GB / 24.8MB",
+          "PIDs": "49"
+        },
+        {
+          "BlockIO": "1.74GB / 14.1GB",
+          "CPUPerc": "7.99%",
+          "Container": "sensorbot5_timescaledb",
+          "ID": "873cfa521aae",
+          "MemPerc": "26.11%",
+          "MemUsage": "3.009GiB / 11.53GiB",
+          "Name": "sensorbot5_timescaledb",
+          "NetIO": "937MB / 17.2MB",
+          "PIDs": "10"
+        },
+        {
+          "BlockIO": "203MB / 38.7MB",
+          "CPUPerc": "2.29%",
+          "Container": "sensorbot5_rabbitmq",
+          "ID": "0b217a2839ad",
+          "MemPerc": "0.90%",
+          "MemUsage": "106.4MiB / 11.53GiB",
+          "Name": "sensorbot5_rabbitmq",
+          "NetIO": "864kB / 435kB",
+          "PIDs": "56"
+        },
+        {
+          "BlockIO": "209kB / 5.62MB",
+          "CPUPerc": "0.00%",
+          "Container": "sensorbot5_frontend",
+          "ID": "ead915b6e67c",
+          "MemPerc": "0.06%",
+          "MemUsage": "7.516MiB / 11.53GiB",
+          "Name": "sensorbot5_frontend",
+          "NetIO": "6.91kB / 1.01kB",
+          "PIDs": "17"
+        }
+      ]
+    },
+    {
+      "label": "after-repeated-load",
+      "timestampIst": "2026-10-09T18:04:19.426+05:30",
+      "containers": [
+        {
+          "BlockIO": "120MB / 2.15MB",
+          "CPUPerc": "0.43%",
+          "Container": "sensorbot5_backend",
+          "ID": "9d2f235e7b99",
+          "MemPerc": "2.07%",
+          "MemUsage": "244.5MiB / 11.53GiB",
+          "Name": "sensorbot5_backend",
+          "NetIO": "2.78MB / 276kB",
+          "PIDs": "37"
+        },
+        {
+          "BlockIO": "5.61GB / 664MB",
+          "CPUPerc": "0.36%",
+          "Container": "sensorbot5_jev",
+          "ID": "067b63a9c12b",
+          "MemPerc": "26.79%",
+          "MemUsage": "3.088GiB / 11.53GiB",
+          "Name": "sensorbot5_jev",
+          "NetIO": "779kB / 341kB",
+          "PIDs": "21"
+        },
+        {
+          "BlockIO": "3.39GB / 991MB",
+          "CPUPerc": "0.00%",
+          "Container": "sensorbot5_ollama",
+          "ID": "f0698dfaa9a6",
+          "MemPerc": "11.01%",
+          "MemUsage": "1.269GiB / 11.53GiB",
+          "Name": "sensorbot5_ollama",
+          "NetIO": "1.07GB / 24.8MB",
+          "PIDs": "49"
+        },
+        {
+          "BlockIO": "1.74GB / 14.1GB",
+          "CPUPerc": "0.02%",
+          "Container": "sensorbot5_timescaledb",
+          "ID": "873cfa521aae",
+          "MemPerc": "26.11%",
+          "MemUsage": "3.009GiB / 11.53GiB",
+          "Name": "sensorbot5_timescaledb",
+          "NetIO": "938MB / 17.2MB",
+          "PIDs": "10"
+        },
+        {
+          "BlockIO": "203MB / 38.7MB",
+          "CPUPerc": "0.49%",
+          "Container": "sensorbot5_rabbitmq",
+          "ID": "0b217a2839ad",
+          "MemPerc": "0.90%",
+          "MemUsage": "106.4MiB / 11.53GiB",
+          "Name": "sensorbot5_rabbitmq",
+          "NetIO": "869kB / 437kB",
+          "PIDs": "56"
+        },
+        {
+          "BlockIO": "209kB / 5.62MB",
+          "CPUPerc": "0.00%",
+          "Container": "sensorbot5_frontend",
+          "ID": "ead915b6e67c",
+          "MemPerc": "0.06%",
+          "MemUsage": "7.516MiB / 11.53GiB",
+          "Name": "sensorbot5_frontend",
+          "NetIO": "6.91kB / 1.01kB",
+          "PIDs": "17"
+        }
+      ]
+    }
+  ]
+}
