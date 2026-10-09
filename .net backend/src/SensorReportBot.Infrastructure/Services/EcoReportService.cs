@@ -126,22 +126,22 @@ public class EcoReportService : IPdfReportService
 
             using var playwright = await Microsoft.Playwright.Playwright.CreateAsync();
             Microsoft.Playwright.IBrowser browser;
+            string? customExecutablePath = Environment.GetEnvironmentVariable("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH");
+            var launchOptions = new Microsoft.Playwright.BrowserTypeLaunchOptions
+            {
+                Headless = true,
+                ExecutablePath = string.IsNullOrWhiteSpace(customExecutablePath) ? null : customExecutablePath,
+                Args = new[] { "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage" }
+            };
+
             try
             {
-                browser = await playwright.Chromium.LaunchAsync(new()
-                {
-                    Headless = true,
-                    Args     = new[] { "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage" }
-                });
+                browser = await playwright.Chromium.LaunchAsync(launchOptions);
             }
             catch (Microsoft.Playwright.PlaywrightException ex) when (ex.Message.Contains("Executable doesn't exist") || ex.Message.Contains("playwright.ps1 install"))
             {
                 Microsoft.Playwright.Program.Main(new[] { "install", "chromium" });
-                browser = await playwright.Chromium.LaunchAsync(new()
-                {
-                    Headless = true,
-                    Args     = new[] { "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage" }
-                });
+                browser = await playwright.Chromium.LaunchAsync(launchOptions);
             }
 
             await using (browser)

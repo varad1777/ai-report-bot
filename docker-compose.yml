@@ -1,5 +1,5 @@
 services:
-  # ---------------- Ollama (your existing services, unchanged) ----------------
+  # ---------------- Ollama (System-2 Reasoning LLM Inference Server) ----------------
   ollama:
     image: ollama/ollama:latest
     container_name: sensorbot_ollama
@@ -12,7 +12,7 @@ services:
       test: ["CMD-SHELL", "ollama list || exit 1"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
   ollama-pull-model:
     image: ollama/ollama:latest
@@ -49,7 +49,7 @@ services:
       timeout: 5s
       retries: 30
 
-  # One-shot job: seeds the DB if it is empty, otherwise exits immediately.
+  # One-shot database seeder: seeds DB schema, assets, signals, and sample telemetry data
   seeder:
     build: ./iam-seed
     container_name: iam-seeder
@@ -63,17 +63,9 @@ services:
       PGPASSWORD: iam_pass
       PGDATABASE: iam_db
       SAMPLE_MINUTES: "1"
-      MONTHS: "1" 
+      MONTHS: "1"
 
-  # ---------------- Adminer (Web UI for PostgreSQL Database) ----------------
-  adminer:
-    image: adminer:latest
-    container_name: sensorbot_adminer
-    restart: unless-stopped
-    ports:
-      - "8080:8080"
-
-  # ---------------- Laya (Offline System-1 Fast Decision Engine) ----------------
+  # ---------------- Laya (System-1 Fast Decision & Classification Engine) ----------------
   laya:
     build: ./laya-service
     container_name: sensorbot_laya
@@ -90,7 +82,55 @@ services:
       timeout: 5s
       retries: 5
 
+  # ---------------- .NET 9 Backend Web API ----------------
+  backend:
+    build:
+      context: ./.net backend
+      dockerfile: Dockerfile
+    container_name: sensorbot_backend
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      laya:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    environment:
+      ConnectionStrings__TimescaleDb: "Host=timescaledb;Port=5432;Database=iam_db;Username=iam_user;Password=iam_pass"
+      Llm__Endpoint: "http://ollama:11434/v1"
+      Llm__Model: "qwen2.5:1.5b"
+      Laya__BaseUrl: "http://laya:8001"
+      Laya__Enabled: "true"
+      ASPNETCORE_URLS: "http://0.0.0.0:5000"
+      Cors__AllowedOrigins__0: "http://localhost:5173"
+      Cors__AllowedOrigins__1: "http://localhost:5174"
+      Cors__AllowedOrigins__2: "http://localhost:80"
+
+  # ---------------- React Frontend App ----------------
+  frontend:
+    build:
+      context: ./react-frontend
+      dockerfile: Dockerfile
+    container_name: sensorbot_frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+  # ---------------- Adminer (Web UI for PostgreSQL Database) ----------------
+  adminer:
+    image: adminer:latest
+    container_name: sensorbot_adminer
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+
 volumes:
   ollama_data:
     driver: local
   pgdata:
+    driver: local

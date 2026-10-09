@@ -31,7 +31,14 @@ import {
 import './App.css';
 
 const SIGNAL_COLORS = ['#009E4D', '#007A3C', '#005A2C', '#0084D6', '#F5A623', '#D93025', '#10B981', '#059669'];
-const API_BASE_URL = 'http://localhost:5000/api';
+const getBackendHost = () => {
+  if (typeof window !== 'undefined' && window.location && window.location.hostname) {
+    return `${window.location.protocol}//${window.location.hostname}:5000`;
+  }
+  return 'http://localhost:5000';
+};
+const BACKEND_URL = getBackendHost();
+const API_BASE_URL = `${BACKEND_URL}/api`;
 
 function App() {
   // Report State
@@ -127,7 +134,7 @@ function App() {
     if (!sessionId) return;
 
     const connection = new signalR.HubConnectionBuilder()
-      .withUrl(`http://localhost:5000/hubs/chat`, {
+      .withUrl(`${BACKEND_URL}/hubs/chat`, {
         skipNegotiation: true,
         transport: signalR.HttpTransportType.WebSockets
       })
