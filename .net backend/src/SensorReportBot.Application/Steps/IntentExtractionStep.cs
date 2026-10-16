@@ -2,6 +2,7 @@ namespace SensorReportBot.Application.Steps;
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Net.Http;
 using System.Threading;
@@ -113,6 +114,36 @@ public class IntentExtractionStep : IChatStep
         if (reply == null || turn == null || string.IsNullOrWhiteSpace(reply.ReplyMessage))
             throw new LlmUnavailableException("The language model did not return a usable reply.");
 
+        // Guard against empty telemetry dates from LLM deep-path
+        if (turn.Parameters.HasAsset && turn.Parameters.HasTime && turn.Parameters.AssetId.HasValue)
+        {
+            var period = ResolveTimeframeToUtc(null, turn.Parameters);
+            if (period.HasValue)
+            {
+                var (hasData, pointCount, minRecorded, maxRecorded) = await _telemetryRepo.CheckDataAvailabilityAsync(
+                    turn.Parameters.AssetId.Value, period.Value.From, period.Value.To, ct);
+
+                if (!hasData)
+                {
+                    string rangeMsg = $"{period.Value.From:yyyy-MM-dd} to {period.Value.To:yyyy-MM-dd}";
+                    string availableNotice = (minRecorded.HasValue && maxRecorded.HasValue)
+                        ? $" Recorded telemetry is available between {minRecorded.Value:yyyy-MM-dd} and {maxRecorded.Value:yyyy-MM-dd}."
+                        : "";
+
+                    state.Reply = $"No telemetry data was found for **{turn.Parameters.AssetName}** between {rangeMsg}.{availableNotice} Please select a date range within the recorded period.";
+                    state.IsOnTopic = true;
+                    state.IsComplete = false;
+                    state.SuggestedAction = SuggestedActions.SelectTimeframe;
+                    state.SuggestedOptions = DefaultTimeframeOptions.ToList();
+                    turn.Parameters.TimeRange = null;
+                    turn.Parameters.FromDate = null;
+                    turn.Parameters.ToDate = null;
+                    state.ExtractedParameters = turn.Parameters;
+                    return;
+                }
+            }
+        }
+
         state.Reply = reply.ReplyMessage.Trim();
         state.IsOnTopic = turn.IsOnTopic;
         state.IsComplete = turn.IsComplete;
@@ -165,6 +196,35 @@ public class IntentExtractionStep : IChatStep
         // ── 2. Deterministic Confirm Queue when already complete (C# Exact Match) ──
         if (prevParams.HasAsset && prevParams.HasTime && IsConfirmation(userMsg))
         {
+            var period = ResolveTimeframeToUtc(null, prevParams);
+            if (period.HasValue && prevParams.AssetId.HasValue)
+            {
+                var (hasData, pointCount, minRecorded, maxRecorded) = await _telemetryRepo.CheckDataAvailabilityAsync(
+                    prevParams.AssetId.Value, period.Value.From, period.Value.To, ct);
+
+                if (!hasData)
+                {
+                    string rangeMsg = $"{period.Value.From:yyyy-MM-dd} to {period.Value.To:yyyy-MM-dd}";
+                    string availableNotice = (minRecorded.HasValue && maxRecorded.HasValue)
+                        ? $" Recorded telemetry is available between {minRecorded.Value:yyyy-MM-dd} and {maxRecorded.Value:yyyy-MM-dd}."
+                        : "";
+
+                    prevParams.TimeRange = null;
+                    prevParams.FromDate = null;
+                    prevParams.ToDate = null;
+
+                    var fastNoData = new FastTurnResult(
+                        Reply: $"Cannot generate report: No telemetry data was found for **{prevParams.AssetName}** between {rangeMsg}.{availableNotice} Please select a date range within the recorded period.",
+                        IsOnTopic: true,
+                        IsComplete: false,
+                        SuggestedAction: SuggestedActions.SelectTimeframe,
+                        SuggestedOptions: DefaultTimeframeOptions,
+                        Parameters: prevParams
+                    );
+                    return new LayaAnalysis(fastNoData, "confirm_queue", true, null, null);
+                }
+            }
+
             var fast = new FastTurnResult(
                 Reply: $"Understood. I am queueing the telemetry report generation for {prevParams.AssetName} ({prevParams.TimeRange ?? $"{prevParams.FromDate} to {prevParams.ToDate}"}).",
                 IsOnTopic: true,
@@ -195,8 +255,41 @@ public class IntentExtractionStep : IChatStep
                 Mode = "raw"
             };
 
+            var period = ResolveTimeframeToUtc(timeResult, targetParams);
+            if (period.HasValue)
+            {
+                var (hasData, pointCount, minRecorded, maxRecorded) = await _telemetryRepo.CheckDataAvailabilityAsync(
+                    matchedAsset.AssetId, period.Value.From, period.Value.To, ct);
+
+                if (!hasData)
+                {
+                    string rangeMsg = $"{period.Value.From:yyyy-MM-dd} to {period.Value.To:yyyy-MM-dd}";
+                    string availableNotice = (minRecorded.HasValue && maxRecorded.HasValue)
+                        ? $" Recorded telemetry is available between {minRecorded.Value:yyyy-MM-dd} and {maxRecorded.Value:yyyy-MM-dd}."
+                        : "";
+
+                    var emptyParams = new ExtractedReportParametersDto
+                    {
+                        AssetId = matchedAsset.AssetId,
+                        AssetName = matchedAsset.Name,
+                        Mode = "raw"
+                    };
+
+                    var fastNoData = new FastTurnResult(
+                        Reply: $"No telemetry data was found for **{matchedAsset.Name}** between {rangeMsg}.{availableNotice} Please select a date range within the recorded period.",
+                        IsOnTopic: true,
+                        IsComplete: false,
+                        SuggestedAction: SuggestedActions.SelectTimeframe,
+                        SuggestedOptions: DefaultTimeframeOptions,
+                        Parameters: emptyParams
+                    );
+                    return new LayaAnalysis(fastNoData, "configure_report", true, matchedAsset, timeResult);
+                }
+            }
+
+            string timeDesc = DescribeTimeframe(targetParams);
             var fast = new FastTurnResult(
-                Reply: $"I have configured the telemetry report for {targetParams.AssetName} covering {targetParams.TimeRange ?? $"{targetParams.FromDate} to {targetParams.ToDate}"}. Would you like me to generate this report?",
+                Reply: $"I have configured the telemetry report for {targetParams.AssetName} covering {timeDesc}. Would you like me to generate this report?",
                 IsOnTopic: true,
                 IsComplete: true,
                 SuggestedAction: SuggestedActions.ConfirmQueue,
@@ -227,15 +320,50 @@ public class IntentExtractionStep : IChatStep
             return new LayaAnalysis(fast, "configure_report", true, matchedAsset, null);
         }
 
-        // Clean direct timeframe answer when asset is already selected
-        if (prevParams.HasAsset && !prevParams.HasTime && timeResult.Found && !hasConversationalNuance)
+        // Clean direct timeframe answer when asset is already selected (allow updates/changes)
+        if (prevParams.HasAsset && timeResult.Found && !hasConversationalNuance)
         {
+            var testParams = prevParams.Clone();
+            testParams.TimeRange = timeResult.TimeRange;
+            testParams.FromDate = timeResult.FromDate;
+            testParams.ToDate = timeResult.ToDate;
+
+            var period = ResolveTimeframeToUtc(timeResult, testParams);
+            if (period.HasValue && prevParams.AssetId.HasValue)
+            {
+                var (hasData, pointCount, minRecorded, maxRecorded) = await _telemetryRepo.CheckDataAvailabilityAsync(
+                    prevParams.AssetId.Value, period.Value.From, period.Value.To, ct);
+
+                if (!hasData)
+                {
+                    string rangeMsg = $"{period.Value.From:yyyy-MM-dd} to {period.Value.To:yyyy-MM-dd}";
+                    string availableNotice = (minRecorded.HasValue && maxRecorded.HasValue)
+                        ? $" Recorded telemetry is available between {minRecorded.Value:yyyy-MM-dd} and {maxRecorded.Value:yyyy-MM-dd}."
+                        : "";
+
+                    prevParams.TimeRange = null;
+                    prevParams.FromDate = null;
+                    prevParams.ToDate = null;
+
+                    var fastNoData = new FastTurnResult(
+                        Reply: $"No telemetry data was found for **{prevParams.AssetName}** between {rangeMsg}.{availableNotice} Please select a date range within the recorded period.",
+                        IsOnTopic: true,
+                        IsComplete: false,
+                        SuggestedAction: SuggestedActions.SelectTimeframe,
+                        SuggestedOptions: DefaultTimeframeOptions,
+                        Parameters: prevParams
+                    );
+                    return new LayaAnalysis(fastNoData, "configure_report", true, null, timeResult);
+                }
+            }
+
             prevParams.TimeRange = timeResult.TimeRange;
             prevParams.FromDate = timeResult.FromDate;
             prevParams.ToDate = timeResult.ToDate;
 
+            string timeDesc = DescribeTimeframe(prevParams);
             var fast = new FastTurnResult(
-                Reply: $"I have configured the telemetry report for {prevParams.AssetName} covering {prevParams.TimeRange ?? $"{prevParams.FromDate} to {prevParams.ToDate}"}. Would you like me to generate this report?",
+                Reply: $"I have configured the telemetry report for {prevParams.AssetName} covering {timeDesc}. Would you like me to generate this report?",
                 IsOnTopic: true,
                 IsComplete: true,
                 SuggestedAction: SuggestedActions.ConfirmQueue,
@@ -276,7 +404,7 @@ public class IntentExtractionStep : IChatStep
         {
             var topicRes = await _layaClient.AskAsync(
                 userMsg,
-                "Is this message relevant to industrial plant machinery, sensors, telemetry, equipment monitoring, or report generation?",
+                "Is this message relevant to industrial plant machinery, sensors, telemetry, equipment monitoring, report generation, or asking about available assets/catalog?",
                 "noul",
                 choices: null,
                 ct);
@@ -332,6 +460,66 @@ public class IntentExtractionStep : IChatStep
         if (string.IsNullOrWhiteSpace(message)) return false;
         string trimmed = message.Trim().TrimEnd('.', '!', '?');
         return ConfirmWords.Contains(trimmed);
+    }
+
+    private static string DescribeTimeframe(ExtractedReportParametersDto p)
+    {
+        if (!string.IsNullOrWhiteSpace(p.TimeRange))
+            return p.TimeRange;
+
+        if (!string.IsNullOrWhiteSpace(p.FromDate))
+        {
+            if (DateTime.TryParse(p.FromDate, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal, out var f))
+            {
+                if (!string.IsNullOrWhiteSpace(p.ToDate) && DateTime.TryParse(p.ToDate, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal, out var t))
+                {
+                    return $"{f:MMM dd, yyyy} to {t:MMM dd, yyyy}";
+                }
+                return $"since {f:MMM dd, yyyy}";
+            }
+        }
+
+        return "the selected period";
+    }
+
+    private static (DateTime From, DateTime To)? ResolveTimeframeToUtc(TimeframeResult? timeResult, ExtractedReportParametersDto? p)
+    {
+        string? fromStr = timeResult?.FromDate ?? p?.FromDate;
+        string? toStr = timeResult?.ToDate ?? p?.ToDate;
+        string? rangeStr = timeResult?.TimeRange ?? p?.TimeRange;
+
+        if (!string.IsNullOrWhiteSpace(fromStr) &&
+            DateTime.TryParse(fromStr, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var f))
+        {
+            DateTime t = DateTime.UtcNow;
+            if (!string.IsNullOrWhiteSpace(toStr) &&
+                DateTime.TryParse(toStr, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsedTo))
+            {
+                t = parsedTo;
+            }
+            if (t < f) (f, t) = (t, f);
+            return (f, t);
+        }
+
+        if (!string.IsNullOrWhiteSpace(rangeStr))
+        {
+            string tr = rangeStr.Trim().ToLowerInvariant();
+            var now = DateTime.UtcNow;
+            if (tr.EndsWith("h") && double.TryParse(tr[..^1], NumberStyles.Any, CultureInfo.InvariantCulture, out var h))
+            {
+                return (now.AddHours(-h), now);
+            }
+            if (tr.EndsWith("d") && double.TryParse(tr[..^1], NumberStyles.Any, CultureInfo.InvariantCulture, out var d))
+            {
+                return (now.AddDays(-d), now);
+            }
+            if (tr.EndsWith("w") && double.TryParse(tr[..^1], NumberStyles.Any, CultureInfo.InvariantCulture, out var w))
+            {
+                return (now.AddDays(-w * 7), now);
+            }
+        }
+
+        return null;
     }
 
     private async Task<(LlmChatReplyDto? Reply, SyncedTurn? Turn)> AskAsync(

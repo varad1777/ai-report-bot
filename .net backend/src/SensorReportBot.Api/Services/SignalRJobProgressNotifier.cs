@@ -25,7 +25,10 @@ public class SignalRJobProgressNotifier : IJobProgressNotifier
         Guid jobId,
         int progressPercentage,
         string statusMessage,
-        string status)
+        string status,
+        long? dbDurationMs = null,
+        long? renderDurationMs = null,
+        long? totalDurationMs = null)
     {
         try
         {
@@ -34,7 +37,10 @@ public class SignalRJobProgressNotifier : IJobProgressNotifier
                 jobId,
                 progressPercentage,
                 statusMessage,
-                status
+                status,
+                dbDurationMs,
+                renderDurationMs,
+                totalDurationMs
             };
 
             if (!string.IsNullOrWhiteSpace(sessionId))

@@ -5,5 +5,13 @@ using System.Threading.Tasks;
 
 public interface IJobProgressNotifier
 {
-    Task NotifyProgressAsync(string? sessionId, Guid jobId, int progressPercentage, string statusMessage, string status);
+    Task NotifyProgressAsync(
+        string? sessionId, 
+        Guid jobId, 
+        int progressPercentage, 
+        string statusMessage, 
+        string status, 
+        long? dbDurationMs = null, 
+        long? renderDurationMs = null, 
+        long? totalDurationMs = null);
 }

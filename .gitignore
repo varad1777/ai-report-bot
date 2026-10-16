@@ -118,3 +118,11 @@ docker-compose.override.yml
 # ==========================================
 **/storage/*.pdf
 **/storage/temp/
+test_generated_report.html
+
+# ==========================================
+# Images & Models
+# ==========================================
+images/
+models/
+model/

@@ -7,6 +7,7 @@ COPY ["src/SensorReportBot.Api/SensorReportBot.Api.csproj", "src/SensorReportBot
 COPY ["src/SensorReportBot.Application/SensorReportBot.Application.csproj", "src/SensorReportBot.Application/"]
 COPY ["src/SensorReportBot.Domain/SensorReportBot.Domain.csproj", "src/SensorReportBot.Domain/"]
 COPY ["src/SensorReportBot.Infrastructure/SensorReportBot.Infrastructure.csproj", "src/SensorReportBot.Infrastructure/"]
+COPY ["src/Laya/Laya.csproj", "src/Laya/"]
 
 RUN dotnet restore "src/SensorReportBot.Api/SensorReportBot.Api.csproj"
 

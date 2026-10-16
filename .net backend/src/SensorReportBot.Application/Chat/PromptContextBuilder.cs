@@ -65,8 +65,8 @@ public static class PromptContextBuilder
 
         string asset = p.HasAsset ? $"asset={p.AssetId} \"{p.AssetName}\"" : "asset=none";
         string time =
-            !string.IsNullOrWhiteSpace(p.TimeRange) ? $"time={p.TimeRange}" :
             !string.IsNullOrWhiteSpace(p.FromDate) ? $"time={p.FromDate}..{(string.IsNullOrWhiteSpace(p.ToDate) ? "now" : p.ToDate)}" :
+            !string.IsNullOrWhiteSpace(p.TimeRange) ? $"time={p.TimeRange}" :
             "time=none";
         return $"{asset} {time}";
     }

@@ -19,6 +19,8 @@ public class SignalDto
     public string? Unit { get; set; }
     public double MinValue { get; set; }
     public double MaxValue { get; set; }
+    public double CriticalMinValue { get; set; } = -2.0;
+    public double CriticalMaxValue { get; set; } = 12.0;
 }
 
 public class ReportRequestDto

@@ -79,8 +79,8 @@ public class PdfGenerationBackgroundService : BackgroundService
             return;
         }
 
-        // Step 2: Render PDF through all phases (SQL Evidence, AI Narrative, HTML compilation, Chromium render)
-        byte[] pdfBytes = await pdfService.GeneratePdfAsync(
+        // Step 2: Render PDF through all phases (SQL Evidence, HTML compilation, Chromium render)
+        var result = await pdfService.GenerateReportResultAsync(
             job.AssetId, 
             fromTime, 
             toTime, 
@@ -103,6 +103,13 @@ public class PdfGenerationBackgroundService : BackgroundService
         string safeAssetName = string.Join("_", job.AssetName.Split(Path.GetInvalidFileNameChars())).Replace(" ", "_");
         string fileName = $"{safeAssetName}_Report_{DateTime.UtcNow:yyyyMMdd_HHmm}.pdf";
 
-        await _jobQueue.CompleteJobAsync(job.Id, pdfBytes, fileName);
+        await _jobQueue.CompleteJobAsync(
+            job.Id, 
+            result.PdfBytes, 
+            fileName, 
+            result.Html, 
+            result.DbDurationMs, 
+            result.RenderDurationMs, 
+            result.TotalDurationMs);
     }
 }

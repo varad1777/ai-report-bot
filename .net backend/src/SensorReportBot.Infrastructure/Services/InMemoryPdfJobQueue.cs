@@ -62,6 +62,11 @@ public class InMemoryPdfJobQueue : IPdfJobQueue
                             job.FilePath = pdfPath;
                             job.FileSizeBytes = new FileInfo(pdfPath).Length;
                         }
+                        string htmlPath = Path.Combine(_storageDir, $"{job.Id}.html");
+                        if (File.Exists(htmlPath))
+                        {
+                            job.HtmlData = File.ReadAllText(htmlPath);
+                        }
                         _jobs[job.Id] = job;
                     }
                 }
@@ -91,6 +96,12 @@ public class InMemoryPdfJobQueue : IPdfJobQueue
                 string pdfPath = Path.Combine(_storageDir, $"{job.Id}.pdf");
                 File.WriteAllBytes(pdfPath, job.PdfData);
                 job.FilePath = pdfPath;
+            }
+
+            if (!string.IsNullOrEmpty(job.HtmlData))
+            {
+                string htmlPath = Path.Combine(_storageDir, $"{job.Id}.html");
+                File.WriteAllText(htmlPath, job.HtmlData);
             }
         }
         catch (Exception ex)
@@ -159,7 +170,10 @@ public class InMemoryPdfJobQueue : IPdfJobQueue
                 CompletedAt = j.CompletedAt,
                 ErrorMessage = j.ErrorMessage,
                 FileSizeBytes = j.FileSizeBytes,
-                FileName = j.FileName
+                FileName = j.FileName,
+                DbDurationMs = j.DbDurationMs,
+                RenderDurationMs = j.RenderDurationMs,
+                TotalDurationMs = j.TotalDurationMs
             })
             .ToList();
 
@@ -185,7 +199,14 @@ public class InMemoryPdfJobQueue : IPdfJobQueue
         }
     }
 
-    public async Task CompleteJobAsync(Guid jobId, byte[] pdfData, string fileName)
+    public async Task CompleteJobAsync(
+        Guid jobId, 
+        byte[] pdfData, 
+        string fileName, 
+        string? htmlData = null, 
+        long? dbDurationMs = null, 
+        long? renderDurationMs = null, 
+        long? totalDurationMs = null)
     {
         if (_jobs.TryGetValue(jobId, out var job))
         {
@@ -198,13 +219,26 @@ public class InMemoryPdfJobQueue : IPdfJobQueue
             job.PdfData = pdfData;
             job.FileSizeBytes = pdfData.Length;
             job.FileName = fileName;
+            job.HtmlData = htmlData;
+            job.DbDurationMs = dbDurationMs;
+            job.RenderDurationMs = renderDurationMs;
+            job.TotalDurationMs = totalDurationMs;
 
             PersistJob(job);
-            _logger.LogInformation("Job {JobId} marked Completed and saved to disk. File size: {Size} bytes", jobId, pdfData.Length);
+            _logger.LogInformation("Job {JobId} marked Completed and saved to disk. File size: {Size} bytes, DbDuration: {Db}ms, RenderDuration: {Render}ms", 
+                jobId, pdfData.Length, dbDurationMs, renderDurationMs);
 
             if (_notifier != null)
             {
-                await _notifier.NotifyProgressAsync(job.SessionId, jobId, 100, job.StatusMessage, "Completed");
+                await _notifier.NotifyProgressAsync(
+                    job.SessionId, 
+                    jobId, 
+                    100, 
+                    job.StatusMessage, 
+                    "Completed", 
+                    dbDurationMs, 
+                    renderDurationMs, 
+                    totalDurationMs);
             }
         }
     }

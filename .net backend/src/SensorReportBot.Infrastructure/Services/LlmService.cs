@@ -111,6 +111,7 @@ public class LlmService : ILlmService
             temperature = _options.Temperature,
             max_tokens = _options.MaxTokens,
             stream = false,
+            keep_alive = "24h",
             response_format = responseFormat,
             options = new
             {

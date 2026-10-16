@@ -107,10 +107,13 @@ public class SignalEvidenceDto
     public string Unit               { get; set; } = string.Empty;
     public double MinLimit           { get; set; }
     public double MaxLimit           { get; set; }
+    public double CriticalMinLimit   { get; set; } = -2.0;
+    public double CriticalMaxLimit   { get; set; } = 12.0;
 
     public double StatMin            { get; set; }
     public double StatMax            { get; set; }
     public double StatAvg            { get; set; }
+    public double LastValue          { get; set; }
     public double StatP95            { get; set; }
     public double StatStdDev         { get; set; }
 
@@ -121,6 +124,9 @@ public class SignalEvidenceDto
 
     [JsonIgnore]
     public bool IsBreached => StatMax > MaxLimit || StatMin < MinLimit;
+
+    [JsonIgnore]
+    public bool IsCriticalBreached => StatMax > CriticalMaxLimit || StatMin < CriticalMinLimit;
 
     [JsonIgnore]
     public string HealthStatus =>
@@ -136,14 +142,34 @@ public class ChartPointDto
     public double   Value { get; set; }
 }
 
+public class AlertDailyCountDto
+{
+    public string   DayLabel      { get; set; } = string.Empty;
+    public DateTime Date          { get; set; }
+    public int      WarningCount  { get; set; }
+    public int      CriticalCount { get; set; }
+}
+
 public class AlertEvidenceDto
 {
-    public string   SignalName      { get; set; } = string.Empty;
-    public DateTime TriggeredAt     { get; set; }
-    public double   TriggerValue    { get; set; }
-    public double   ThresholdValue  { get; set; }
-    public string   Severity        { get; set; } = string.Empty;
-    public string   Status          { get; set; } = string.Empty;
+    public string       Source             { get; set; } = "Health Score";
+    public string       AlertName          { get; set; } = string.Empty;
+    public string       SignalName         { get; set; } = string.Empty;
+    public string       Unit               { get; set; } = string.Empty;
+    public string       Type               { get; set; } = "Alert";
+    public DateTime     TriggeredAt        { get; set; }
+    public DateTime?    ResolvedAt         { get; set; }
+    public double       TriggerValue       { get; set; }
+    public double       ThresholdValue     { get; set; }
+    public double       WarningThreshold   { get; set; } = 10.0;
+    public double       CriticalThreshold  { get; set; } = 12.0;
+    public string       Severity           { get; set; } = string.Empty;
+    public string       Status             { get; set; } = string.Empty;
+    public string       Description        { get; set; } = string.Empty;
+    public string       EndTimeText        { get; set; } = "Ongoing";
+    public string       UserSettingsText   { get; set; } = "Critical 110%, Warning 102%";
+    public List<string> PossibleCauses     { get; set; } = new();
+    public List<string> RecommendedActions { get; set; } = new();
 }
 
 /// <summary>Full consolidated evidence object passed to the narrative generator.</summary>
@@ -158,8 +184,11 @@ public class ReportEvidenceDto
     public int                          TotalExcursions   { get; set; }
     public int                          CriticalAlerts    { get; set; }
     public int                          WarningAlerts     { get; set; }
-    public List<SignalEvidenceDto>       Signals           { get; set; } = new();
-    public List<AlertEvidenceDto>        TopAlerts         { get; set; } = new();
+    public double                       WarningPercentage { get; set; } = 50.0;
+    public double                       CriticalPercentage{ get; set; } = 50.0;
+    public List<AlertDailyCountDto>     DailyAlertCounts  { get; set; } = new();
+    public List<SignalEvidenceDto>      Signals           { get; set; } = new();
+    public List<AlertEvidenceDto>       TopAlerts         { get; set; } = new();
 
     // Structural report datasets
     public ContextSummaryDto            Context           { get; set; } = new();

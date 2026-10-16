@@ -8,26 +8,24 @@ services:
     volumes:
       - ollama_data:/root/.ollama
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "ollama list || exit 1"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
-  ollama-pull-model:
-    image: ollama/ollama:latest
-    container_name: sensorbot_ollama_puller
-    depends_on:
-      ollama:
-        condition: service_healthy
     entrypoint: /bin/sh
     command:
       - "-c"
       - |
-        echo "Pulling Qwen 2.5 (1.5B) model into Ollama for high-speed local inference..."
-        OLLAMA_HOST=http://ollama:11434 ollama pull qwen2.5:1.5b
-        echo "Qwen 2.5 (1.5B) model downloaded successfully and ready for inference!"
-    restart: "no"
+        ollama serve &
+        SERVER_PID=$$!
+        echo "Waiting for Ollama service to start..."
+        until ollama list > /dev/null 2>&1; do sleep 1; done
+        echo "Ensuring Qwen 2.5 (1.5B) model is downloaded..."
+        ollama pull qwen2.5:1.5b
+        echo "Qwen 2.5 (1.5B) is ready for inference."
+        wait $$SERVER_PID
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list | grep -q 'qwen2.5:1.5b' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
 
   # ---------------- Postgres + TimescaleDB ----------------
   timescaledb:
@@ -65,24 +63,18 @@ services:
       SAMPLE_MINUTES: "1"
       MONTHS: "1"
 
-  # ---------------- Laya (System-1 Fast Decision & Classification Engine) ----------------
-  laya:
-    build: ./laya-service
-    container_name: sensorbot_laya
+  # ---------------- JEV (Laya) Decision Model Image ----------------
+  jev-model:
+    build:
+      context: ./models
+      dockerfile: Dockerfile
+    image: jev-model:latest
+    container_name: sensorbot_jev_model
     restart: unless-stopped
-    ports:
-      - "8001:8001"
-    environment:
-      - HF_HOME=/models/cache
-      - HF_HUB_OFFLINE=1
-      - TRANSFORMERS_OFFLINE=1
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8001/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+    volumes:
+      - jev_model_data:/app/models/laya-multilingual/multilingual
 
-  # ---------------- .NET 9 Backend Web API ----------------
+  # ---------------- .NET 9 Backend Web API (Hosts Native In-Process .NET Decision Engine) ----------------
   backend:
     build:
       context: ./.net backend
@@ -94,16 +86,19 @@ services:
     depends_on:
       timescaledb:
         condition: service_healthy
-      laya:
-        condition: service_healthy
       ollama:
         condition: service_healthy
+      jev-model:
+        condition: service_started
+    volumes:
+      - jev_model_data:/app/models/laya-multilingual/multilingual:ro
     environment:
       ConnectionStrings__TimescaleDb: "Host=timescaledb;Port=5432;Database=iam_db;Username=iam_user;Password=iam_pass"
       Llm__Endpoint: "http://ollama:11434/v1"
       Llm__Model: "qwen2.5:1.5b"
-      Laya__BaseUrl: "http://laya:8001"
+      Llm__TimeoutSeconds: "300"
       Laya__Enabled: "true"
+      Laya__ModelDirectory: "/app/models/laya-multilingual/multilingual"
       ASPNETCORE_URLS: "http://0.0.0.0:5000"
       Cors__AllowedOrigins__0: "http://localhost:5173"
       Cors__AllowedOrigins__1: "http://localhost:5174"
@@ -133,4 +128,6 @@ volumes:
   ollama_data:
     driver: local
   pgdata:
+    driver: local
+  jev_model_data:
     driver: local

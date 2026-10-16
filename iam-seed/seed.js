@@ -1,10 +1,17 @@
 'use strict';
 /**
  * Seeds Postgres + TimescaleDB with:
- *   - 5 motor assets, 122 signals each (610 signals)
- *   - 6 months of raw signal values -> hypertable signal_data
- *   - 3-4 events per week (signal crosses its min/max, then comes back)
- *   - 10 alerts (signal crosses its min/max; 7 resolved, 1 acknowledged, 2 open)
+ *   - 5 motor assets, 120 signals each (600 signals total)
+ *   - Thresholds for all signals:
+ *       Warning Band : [0.0, 10.0]  (min_value = 0, max_value = 10)
+ *       Critical Band: [-2.0, 12.0] (critical_min_value = -2, critical_max_value = 12)
+ *   - Normal operating values stay healthy inside [1.0, 9.0]
+ *   - Excursions:
+ *       Crossing 10.0 (or 0.0) -> WARNING event/alert (peaks between 10.4 and 11.6 / -0.4 and -1.6)
+ *       Crossing 12.0 (or -2.0) -> CRITICAL event/alert (peaks between 12.5 and 14.5 / -2.5 and -4.5)
+ *   - Raw signal values -> hypertable signal_data
+ *   - 3-4 events per week (mix of WARNING and CRITICAL)
+ *   - 12 alerts (mix of WARNING and CRITICAL; resolved, acknowledged, and open)
  *
  * Every event / alert is ALSO injected into the raw data, so querying signal_data
  * shows the same crossing that is recorded in the events / alerts tables.
@@ -32,13 +39,19 @@ const CFG = {
   },
   months: +(process.env.MONTHS || 6),
   sampleMinutes: +(process.env.SAMPLE_MINUTES || 5),
-  signalsPerAsset: 122,
+  signalsPerAsset: 120,
   eventsPerWeek: [3, 4],
-  alertCount: 10,
+  alertCount: 12,
   seed: +(process.env.SEED || 42),
 };
 const RESET = process.argv.includes('--reset');
 const DRY_RUN = process.argv.includes('--dry-run');
+
+// Standardized Dual-Tier Thresholds
+const WARN_MIN = 0.0;
+const WARN_MAX = 10.0;
+const CRIT_MIN = -2.0;
+const CRIT_MAX = 12.0;
 
 const ASSETS = [
   { name: 'Boiler Feed Pump Motor', location: 'Boiler House' },
@@ -63,93 +76,101 @@ const ri = (a, b) => Math.floor(rr(a, b + 1));
 const TWO_PI = Math.PI * 2;
 const DAY_MS = 86400000;
 
-// ------------------------------------------------------------------ signal templates (122 per motor)
-// lo / hi  = min_value / max_value stored in the signals table (the limits)
-// frac     = where the normal operating value sits inside [lo, hi]
-// dir      = which side may be crossed: 'high' | 'low' | 'both'
+// ------------------------------------------------------------------ signal templates (120 per motor)
 function buildTemplates() {
   const T = [];
-  const add = (name, unit, lo, hi, o = {}) =>
-    T.push({ name, unit, lo, hi, frac: [0.4, 0.6], dir: 'high', ...o });
+  const add = (name, unit, o = {}) =>
+    T.push({
+      name,
+      unit,
+      lo: WARN_MIN,
+      hi: WARN_MAX,
+      critLo: CRIT_MIN,
+      critHi: CRIT_MAX,
+      frac: [0.4, 0.6], // normal resting baseline sits between 4.0 and 6.0
+      dir: 'high',
+      ...o
+    });
+
   const P = ['U', 'V', 'W'], L = ['L1', 'L2', 'L3'], POS = ['DE', 'NDE'], AX = ['H', 'V', 'A'];
 
   // temperatures (11)
-  P.forEach((p) => add(`Winding_Temp_${p}`, '°C', 10, 130, { frac: [0.45, 0.6] }));
-  POS.forEach((p) => add(`Bearing_Temp_${p}`, '°C', 10, 95, { frac: [0.45, 0.6] }));
-  add('Ambient_Temp', '°C', 0, 50, { frac: [0.5, 0.6] });
-  add('Housing_Temp', '°C', 10, 90, { frac: [0.45, 0.6] });
-  add('Coolant_Temp', '°C', 10, 80, { frac: [0.4, 0.55] });
-  add('Stator_Core_Temp', '°C', 10, 120, { frac: [0.45, 0.6] });
-  add('Rotor_Temp', '°C', 10, 140, { frac: [0.45, 0.6] });
-  add('Cooling_Fan_Temp', '°C', 10, 80, { frac: [0.4, 0.55] });
+  P.forEach((p) => add(`Winding_Temp_${p}`, '°C'));
+  POS.forEach((p) => add(`Bearing_Temp_${p}`, '°C'));
+  add('Ambient_Temp', '°C');
+  add('Housing_Temp', '°C');
+  add('Coolant_Temp', '°C');
+  add('Stator_Core_Temp', '°C');
+  add('Rotor_Temp', '°C');
+  add('Cooling_Fan_Temp', '°C');
 
   // vibration (18)
-  POS.forEach((p) => AX.forEach((a) => add(`Vib_Vel_${p}_${a}`, 'mm/s', 0, 7.1, { frac: [0.15, 0.4] })));
-  POS.forEach((p) => AX.forEach((a) => add(`Vib_Acc_${p}_${a}`, 'g', 0, 10, { frac: [0.1, 0.4] })));
-  POS.forEach((p) => AX.forEach((a) => add(`Vib_Env_${p}_${a}`, 'gE', 0, 12, { frac: [0.1, 0.4] })));
+  POS.forEach((p) => AX.forEach((a) => add(`Vib_Vel_${p}_${a}`, 'mm/s')));
+  POS.forEach((p) => AX.forEach((a) => add(`Vib_Acc_${p}_${a}`, 'g')));
+  POS.forEach((p) => AX.forEach((a) => add(`Vib_Env_${p}_${a}`, 'gE')));
 
   // current (6)
-  L.forEach((l) => add(`Current_${l}`, 'A', 0, 120, { frac: [0.5, 0.7] }));
-  add('Neutral_Current', 'A', 0, 20, { frac: [0.1, 0.3] });
-  add('Current_Imbalance', '%', 0, 10, { frac: [0.1, 0.35] });
-  add('Inrush_Current_Peak', 'A', 0, 600, { frac: [0.2, 0.4] });
+  L.forEach((l) => add(`Current_${l}`, 'A'));
+  add('Neutral_Current', 'A');
+  add('Current_Imbalance', '%');
+  add('Inrush_Current_Peak', 'A');
 
   // voltage (7)
-  ['L12', 'L23', 'L31'].forEach((l) => add(`Voltage_${l}`, 'V', 360, 440, { frac: [0.45, 0.6], dir: 'both' }));
-  L.forEach((l) => add(`Voltage_${l}N`, 'V', 210, 250, { frac: [0.45, 0.6], dir: 'both' }));
-  add('Voltage_Imbalance', '%', 0, 5, { frac: [0.1, 0.3] });
+  ['L12', 'L23', 'L31'].forEach((l) => add(`Voltage_${l}`, 'V', { dir: 'both' }));
+  L.forEach((l) => add(`Voltage_${l}N`, 'V', { dir: 'both' }));
+  add('Voltage_Imbalance', '%');
 
   // power (4)
-  add('Active_Power', 'kW', 0, 75, { frac: [0.45, 0.7] });
-  add('Reactive_Power', 'kVAr', 0, 40, { frac: [0.3, 0.5] });
-  add('Apparent_Power', 'kVA', 0, 85, { frac: [0.5, 0.7] });
-  add('Power_Factor', '', 0.8, 1.0, { frac: [0.55, 0.8], dir: 'low' });
+  add('Active_Power', 'kW');
+  add('Reactive_Power', 'kVAr');
+  add('Apparent_Power', 'kVA');
+  add('Power_Factor', '', { dir: 'low' });
 
   // speed / load (6)
-  add('Speed_RPM', 'rpm', 1400, 1520, { frac: [0.5, 0.7], dir: 'both' });
-  add('Frequency', 'Hz', 49, 51, { frac: [0.4, 0.6], dir: 'both' });
-  add('Slip', '%', 0, 5, { frac: [0.3, 0.5] });
-  add('Torque', 'Nm', 0, 600, { frac: [0.4, 0.65] });
-  add('Load', '%', 0, 110, { frac: [0.5, 0.75] });
-  add('Shaft_Power', 'kW', 0, 70, { frac: [0.45, 0.7] });
+  add('Speed_RPM', 'rpm', { dir: 'both' });
+  add('Frequency', 'Hz', { dir: 'both' });
+  add('Slip', '%');
+  add('Torque', 'Nm');
+  add('Load', '%');
+  add('Shaft_Power', 'kW');
 
   // power quality (18)
-  L.forEach((l) => add(`Current_THD_${l}`, '%', 0, 8, { frac: [0.2, 0.45] }));
-  L.forEach((l) => add(`Voltage_THD_${l}`, '%', 0, 5, { frac: [0.15, 0.4] }));
-  [3, 5, 7, 11].forEach((h) => L.forEach((l) => add(`Current_H${h}_${l}`, '%', 0, 6, { frac: [0.1, 0.35] })));
+  L.forEach((l) => add(`Current_THD_${l}`, '%'));
+  L.forEach((l) => add(`Voltage_THD_${l}`, '%'));
+  [3, 5, 7, 11].forEach((h) => L.forEach((l) => add(`Current_H${h}_${l}`, '%')));
 
   // insulation / electrical health (6)
-  add('Insulation_Resistance', 'MΩ', 10, 1000, { frac: [0.5, 0.8], dir: 'low' });
-  P.forEach((p) => add(`Winding_Resistance_${p}`, 'mΩ', 400, 600, { frac: [0.4, 0.6], dir: 'both' }));
-  add('Leakage_Current', 'mA', 0, 30, { frac: [0.1, 0.35] });
-  add('Partial_Discharge', 'pC', 0, 1000, { frac: [0.05, 0.3] });
+  add('Insulation_Resistance', 'MΩ', { dir: 'low' });
+  P.forEach((p) => add(`Winding_Resistance_${p}`, 'mΩ', { dir: 'both' }));
+  add('Leakage_Current', 'mA');
+  add('Partial_Discharge', 'pC');
 
   // lubrication (4)
-  add('Oil_Pressure', 'bar', 1, 6, { frac: [0.4, 0.6], dir: 'both' });
-  add('Oil_Temp', '°C', 10, 90, { frac: [0.45, 0.6] });
-  add('Oil_Level', '%', 20, 100, { frac: [0.6, 0.85], dir: 'low' });
-  add('Oil_Flow', 'L/min', 2, 20, { frac: [0.4, 0.6], dir: 'both' });
+  add('Oil_Pressure', 'bar', { dir: 'both' });
+  add('Oil_Temp', '°C');
+  add('Oil_Level', '%', { dir: 'low' });
+  add('Oil_Flow', 'L/min', { dir: 'both' });
 
   // cooling (4)
-  add('Fan_Speed', 'rpm', 200, 1800, { frac: [0.5, 0.7], dir: 'both' });
-  add('Air_Flow', 'm3/h', 100, 2000, { frac: [0.4, 0.6], dir: 'both' });
-  add('Coolant_Flow', 'L/min', 5, 60, { frac: [0.4, 0.6], dir: 'both' });
-  add('Coolant_Pressure', 'bar', 0.5, 5, { frac: [0.4, 0.6], dir: 'both' });
+  add('Fan_Speed', 'rpm', { dir: 'both' });
+  add('Air_Flow', 'm3/h', { dir: 'both' });
+  add('Coolant_Flow', 'L/min', { dir: 'both' });
+  add('Coolant_Pressure', 'bar', { dir: 'both' });
 
   // shaft (4)
-  add('Shaft_Disp_X', 'um', 0, 100, { frac: [0.15, 0.4] });
-  add('Shaft_Disp_Y', 'um', 0, 100, { frac: [0.15, 0.4] });
-  add('Axial_Position', 'um', -100, 100, { frac: [0.4, 0.6], dir: 'both' });
-  add('Shaft_Eccentricity', 'um', 0, 80, { frac: [0.1, 0.3] });
+  add('Shaft_Disp_X', 'um');
+  add('Shaft_Disp_Y', 'um');
+  add('Axial_Position', 'um', { dir: 'both' });
+  add('Shaft_Eccentricity', 'um');
 
   // embedded RTDs (6)
-  for (let n = 1; n <= 6; n++) add(`Winding_RTD_${n}`, '°C', 10, 130, { frac: [0.45, 0.6] });
+  for (let n = 1; n <= 6; n++) add(`Winding_RTD_${n}`, '°C');
 
-  // pad up to 122 with auxiliary channels
+  // pad up to 120 with auxiliary channels
   for (let n = 1; T.length < CFG.signalsPerAsset; n++) {
     const id = String(n).padStart(2, '0');
-    add(`Aux_Temp_${id}`, '°C', 0, 100, { frac: [0.35, 0.6] });
-    if (T.length < CFG.signalsPerAsset) add(`Aux_Vib_${id}`, 'mm/s', 0, 10, { frac: [0.15, 0.4] });
+    add(`Aux_Temp_${id}`, '°C');
+    if (T.length < CFG.signalsPerAsset) add(`Aux_Vib_${id}`, 'mm/s');
   }
   return T.slice(0, CFG.signalsPerAsset);
 }
@@ -170,15 +191,15 @@ const TPL = buildTemplates();
 const sigs = [];
 ASSETS.forEach((_, ai) => {
   TPL.forEach((t) => {
-    const R = t.hi - t.lo;
-    const base = t.lo + rr(t.frac[0], t.frac[1]) * R;
+    const R = t.hi - t.lo; // 10.0
+    const base = t.lo + rr(t.frac[0], t.frac[1]) * R; // around 4.0 to 6.0
     sigs.push({
       ai, t, R, base,
-      amp: Math.min(rr(0.03, 0.06) * R, 0.4 * (base - t.lo)),   // daily swing
-      sd: Math.min(rr(0.008, 0.016) * R, 0.15 * (base - t.lo)), // noise
+      amp: rr(0.4, 0.9),  // gentle daily swing
+      sd: rr(0.08, 0.18), // noise
       phase: rr(0, TWO_PI),
-      cLo: t.lo + 0.02 * R, // normal data is clamped inside the limits
-      cHi: t.hi - 0.03 * R,
+      cLo: 1.0,           // normal data is strictly clamped inside [1.0, 9.0]
+      cHi: 9.0,
     });
   });
 });
@@ -191,11 +212,11 @@ const overlaps = (si, s, e) => windows[si].some((w) => s <= w.e + GAP && e >= w.
 
 function excursionValue(w, i) {
   const p = (i - w.s) / Math.max(1, w.e - w.s);
-  const k = 0.15 + 0.85 * Math.sin(Math.PI * p); // always beyond the limit, peaks mid-window
-  return w.dir === 'high' ? w.limit + w.margin * k : w.limit - w.margin * k;
+  const k = 0.2 + 0.8 * Math.sin(Math.PI * p); // peaks at mid-window
+  return w.dir === 'high' ? w.baseThreshold + w.delta * k : w.baseThreshold - w.delta * k;
 }
 
-function tryPlace(sMin, sMax, dur, ongoing) {
+function tryPlace(sMin, sMax, dur, ongoing, forceSeverity = null) {
   if (!ongoing && sMax < sMin) return null;
   for (let tries = 0; tries < 300; tries++) {
     const si = ri(0, S - 1);
@@ -205,9 +226,41 @@ function tryPlace(sMin, sMax, dur, ongoing) {
     if (overlaps(si, s, e)) continue;
     const t = sigs[si].t;
     const dir = t.dir === 'both' ? (rand() < 0.5 ? 'high' : 'low') : t.dir;
-    let margin = rr(0.03, 0.15) * (t.hi - t.lo);
-    if (dir === 'low' && t.lo > 0) margin = Math.min(margin, t.lo * 0.9);
-    const w = { si, s, e, ongoing, dir, margin, limit: dir === 'high' ? t.hi : t.lo, severe: margin / (t.hi - t.lo) >= 0.09 };
+
+    // Severity: CRITICAL vs WARNING
+    const isCritical = forceSeverity ? (forceSeverity === 'CRITICAL') : (rand() < 0.4);
+    const severity = isCritical ? 'CRITICAL' : 'WARNING';
+
+    let baseThreshold, threshold, delta;
+    if (severity === 'CRITICAL') {
+      // Surges past Warning (10/0) AND crosses Critical limit (12/-2)
+      if (dir === 'high') {
+        baseThreshold = t.hi;      // 10.0
+        threshold = t.critHi;      // 12.0
+        delta = rr(2.4, 4.5);      // peaks at 12.4 .. 14.5 (well above 12.0)
+      } else {
+        baseThreshold = t.lo;      // 0.0
+        threshold = t.critLo;      // -2.0
+        delta = rr(2.4, 4.5);      // drops to -2.4 .. -4.5 (well below -2.0)
+      }
+    } else {
+      // WARNING: Crosses Warning (10/0) but strictly stays below Critical limit (12/-2)
+      if (dir === 'high') {
+        baseThreshold = t.hi;      // 10.0
+        threshold = t.hi;          // 10.0
+        delta = rr(0.4, 1.6);      // peaks at 10.4 .. 11.6 (between 10.0 and 12.0)
+      } else {
+        baseThreshold = t.lo;      // 0.0
+        threshold = t.lo;          // 0.0
+        delta = rr(0.4, 1.6);      // drops to -0.4 .. -1.6 (between 0.0 and -2.0)
+      }
+    }
+
+    const w = {
+      si, s, e, ongoing, dir, severity,
+      baseThreshold, threshold, delta
+    };
+
     let peak = excursionValue(w, s);
     for (let i = s; i <= e; i++) {
       const v = excursionValue(w, i);
@@ -223,19 +276,21 @@ function tryPlace(sMin, sMax, dur, ongoing) {
 const alertPlan = [];
 const eventPlan = [];
 
-// alerts first (spread across the 6 months; the last 3 are still ongoing at "now")
+// Alerts: 12 alerts across timeline; last 3 are ongoing at "now" (2 OPEN, 1 ACKNOWLEDGED)
 for (let i = 0; i < CFG.alertCount; i++) {
   const ongoing = i >= CFG.alertCount - 3;
   const status = ongoing ? (i === CFG.alertCount - 3 ? 'ACKNOWLEDGED' : 'OPEN') : 'RESOLVED';
-  const dur = minToSamples(ongoing ? rr(60, 240) : rr(60, 240));
+  const dur = minToSamples(rr(60, 240));
   const segLen = Math.floor(N / (CFG.alertCount - 3));
   const sMin = i * segLen + 2;
   const sMax = Math.min((i + 1) * segLen - dur - 3, N - dur - 3);
-  const w = tryPlace(sMin, sMax, dur, ongoing);
+  // Realistic distribution of WARNING vs CRITICAL alerts
+  const forceSeverity = (i % 2 === 0) ? 'WARNING' : 'CRITICAL';
+  const w = tryPlace(sMin, sMax, dur, ongoing, forceSeverity);
   if (w) alertPlan.push({ w, status });
 }
 
-// events: 3-4 per week
+// Events: 3-4 per week (mix of WARNING and CRITICAL excursions)
 const SPW = Math.round((7 * 24 * 60) / CFG.sampleMinutes);
 const weeks = Math.ceil(N / SPW);
 const eventsPerWeekCount = [];
@@ -308,12 +363,17 @@ async function insertMany(client, table, cols, rows, chunk = 500, returning = ''
 }
 
 function summary() {
+  const critAlerts = alertPlan.filter((a) => a.w.severity === 'CRITICAL').length;
+  const warnAlerts = alertPlan.filter((a) => a.w.severity === 'WARNING').length;
+  const critEvents = eventPlan.filter((e) => e.w.severity === 'CRITICAL').length;
+  const warnEvents = eventPlan.filter((e) => e.w.severity === 'WARNING').length;
   console.log(`Range      : ${iso(startMs)} -> ${iso(endMs)}`);
   console.log(`Samples    : ${N.toLocaleString()} timestamps every ${CFG.sampleMinutes} min`);
   console.log(`Assets     : ${ASSETS.length}   Signals: ${S} (${TPL.length} per asset)`);
+  console.log(`Limits     : Warning [${WARN_MIN} .. ${WARN_MAX}], Critical [${CRIT_MIN} .. ${CRIT_MAX}]`);
   console.log(`Rows       : ${(N * S).toLocaleString()} in signal_data`);
-  console.log(`Events     : ${eventPlan.length} (per week: min ${Math.min(...eventsPerWeekCount)}, max ${Math.max(...eventsPerWeekCount)})`);
-  console.log(`Alerts     : ${alertPlan.length}`);
+  console.log(`Events     : ${eventPlan.length} (Warning: ${warnEvents}, Critical: ${critEvents})`);
+  console.log(`Alerts     : ${alertPlan.length} (Warning: ${warnAlerts}, Critical: ${critAlerts})`);
 }
 
 // ------------------------------------------------------------------ main
@@ -364,9 +424,18 @@ async function main() {
       ASSETS.map((a) => [a.name, 'Motor', a.location]), 500, 'RETURNING asset_id, name');
     const assetId = Object.fromEntries(assetRows.map((r) => [r.name, r.asset_id]));
 
-    // signals
-    const sigRows = await insertMany(client, 'signals', ['asset_id', 'name', 'unit', 'min_value', 'max_value'],
-      sigs.map((g) => [assetId[ASSETS[g.ai].name], g.t.name, g.t.unit, g.t.lo, g.t.hi]),
+    // signals (120 per asset with dual thresholds: warning [0..10], critical [-2..12])
+    const sigRows = await insertMany(client, 'signals',
+      ['asset_id', 'name', 'unit', 'min_value', 'max_value', 'critical_min_value', 'critical_max_value'],
+      sigs.map((g) => [
+        assetId[ASSETS[g.ai].name],
+        g.t.name,
+        g.t.unit,
+        g.t.lo,
+        g.t.hi,
+        g.t.critLo,
+        g.t.critHi
+      ]),
       500, 'RETURNING signal_id, asset_id, name');
     const sigKey = new Map(sigRows.map((r) => [`${r.asset_id}:${r.name}`, r.signal_id]));
     sigs.forEach((g, s) => {
@@ -383,24 +452,41 @@ async function main() {
     await pipeline(Readable.from(rowChunks(), { objectMode: false }), copyStream);
     console.log(`Loaded ${rowsGenerated.toLocaleString()} rows in ${((Date.now() - t0) / 1000).toFixed(0)}s.`);
 
-    // events
+    // events (with warning vs critical severity and threshold crossed)
     const evRows = eventPlan.map(({ w }) => {
       const g = sigs[w.si];
-      return [g.assetId, g.signalId, w.dir === 'high' ? 'HIGH_EXCURSION' : 'LOW_EXCURSION',
-        iso(tsAt(w.s)), iso(tsAt(w.e + 1)), +w.peak.toFixed(3), w.limit];
+      const evType = (w.severity === 'CRITICAL' ? 'CRITICAL_' : 'WARNING_') + (w.dir === 'high' ? 'HIGH_EXCURSION' : 'LOW_EXCURSION');
+      return [
+        g.assetId,
+        g.signalId,
+        evType,
+        iso(tsAt(w.s)),
+        iso(tsAt(w.e + 1)),
+        +w.peak.toFixed(3),
+        w.threshold,
+        w.severity
+      ];
     });
     await insertMany(client, 'events',
-      ['asset_id', 'signal_id', 'event_type', 'start_time', 'end_time', 'peak_value', 'threshold'], evRows);
+      ['asset_id', 'signal_id', 'event_type', 'start_time', 'end_time', 'peak_value', 'threshold', 'severity'],
+      evRows);
 
-    // alerts
+    // alerts (with severity WARNING vs CRITICAL and status OPEN / ACKNOWLEDGED / RESOLVED)
     const alRows = alertPlan.map(({ w, status }) => {
       const g = sigs[w.si];
       const trig = tsAt(w.s);
       const ackMs = trig + Math.min(rr(3, 20) * 60000, ((w.e - w.s) * STEP_MS) / 2);
-      return [g.assetId, g.signalId, iso(trig), +excursionValue(w, w.s).toFixed(3), w.limit,
-        w.severe ? 'CRITICAL' : 'WARNING', status,
+      return [
+        g.assetId,
+        g.signalId,
+        iso(trig),
+        +excursionValue(w, w.s).toFixed(3),
+        w.threshold,
+        w.severity,
+        status,
         status === 'OPEN' ? null : iso(ackMs),
-        status === 'RESOLVED' ? iso(tsAt(w.e + 1)) : null];
+        status === 'RESOLVED' ? iso(tsAt(w.e + 1)) : null
+      ];
     });
     await insertMany(client, 'alerts',
       ['asset_id', 'signal_id', 'triggered_at', 'trigger_value', 'threshold_value', 'severity', 'status', 'acknowledged_at', 'resolved_at'],

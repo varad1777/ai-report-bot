@@ -44,6 +44,20 @@ public class ReportsController : ControllerBase
             return BadRequest(new { error = "Valid AssetId is required." });
         }
 
+        DateTime to = request.To ?? DateTime.UtcNow;
+        DateTime from = request.From ?? to.AddDays(-7);
+
+        var (hasData, pointCount, minRecorded, maxRecorded) = await _telemetryRepository.CheckDataAvailabilityAsync(
+            request.AssetId, from, to, ct);
+
+        if (!hasData)
+        {
+            string notice = (minRecorded.HasValue && maxRecorded.HasValue)
+                ? $" Recorded telemetry is available between {minRecorded.Value:yyyy-MM-dd} and {maxRecorded.Value:yyyy-MM-dd}."
+                : "";
+            return BadRequest(new { error = $"No telemetry data exists for this asset between {from:yyyy-MM-dd} and {to:yyyy-MM-dd}.{notice}" });
+        }
+
         var reportData = await _telemetryRepository.GenerateReportDataAsync(request, ct);
         return Ok(reportData);
     }
@@ -63,6 +77,20 @@ public class ReportsController : ControllerBase
         var assets = await _telemetryRepository.GetAssetsAsync(ct);
         var asset = assets.FirstOrDefault(a => a.AssetId == request.AssetId);
         string assetName = asset?.Name ?? $"Asset-{request.AssetId}";
+
+        DateTime to = request.To ?? DateTime.UtcNow;
+        DateTime from = request.From ?? to.AddDays(-7);
+
+        var (hasData, pointCount, minRecorded, maxRecorded) = await _telemetryRepository.CheckDataAvailabilityAsync(
+            request.AssetId, from, to, ct);
+
+        if (!hasData)
+        {
+            string notice = (minRecorded.HasValue && maxRecorded.HasValue)
+                ? $" Recorded telemetry is available between {minRecorded.Value:yyyy-MM-dd} and {maxRecorded.Value:yyyy-MM-dd}."
+                : "";
+            return BadRequest(new { error = $"No telemetry data exists for '{assetName}' between {from:yyyy-MM-dd} and {to:yyyy-MM-dd}.{notice}" });
+        }
 
         var job = await _pdfJobQueue.EnqueueAsync(request, assetName, ct);
 
@@ -105,7 +133,10 @@ public class ReportsController : ControllerBase
             CompletedAt = job.CompletedAt,
             ErrorMessage = job.ErrorMessage,
             FileSizeBytes = job.FileSizeBytes,
-            FileName = job.FileName
+            FileName = job.FileName,
+            DbDurationMs = job.DbDurationMs,
+            RenderDurationMs = job.RenderDurationMs,
+            TotalDurationMs = job.TotalDurationMs
         });
     }
 
@@ -149,5 +180,55 @@ public class ReportsController : ControllerBase
 
         string fileName = job.FileName ?? $"Report_{job.AssetName}_{DateTime.UtcNow:yyyyMMdd_HHmm}.pdf";
         return File(pdfStream, "application/pdf", fileName);
+    }
+
+    [HttpGet("jobs/{jobId:guid}/preview")]
+    public async Task<IActionResult> PreviewJobPdf(Guid jobId)
+    {
+        var job = await _pdfJobQueue.GetJobAsync(jobId);
+        if (job == null)
+        {
+            return NotFound(new { error = $"Job {jobId} not found." });
+        }
+
+        if (job.Status != SensorReportBot.Domain.Enums.ReportJobStatus.Completed)
+        {
+            return BadRequest(new { error = $"Job is not completed yet. Current status: {job.Status}", status = job.Status.ToString() });
+        }
+
+        var pdfStream = await _pdfJobQueue.GetJobPdfStreamAsync(jobId);
+        if (pdfStream == null)
+        {
+            return NotFound(new { error = "PDF report file not found on server disk storage." });
+        }
+
+        Response.Headers.Append("Content-Disposition", "inline; filename=\"" + (job.FileName ?? "report.pdf") + "\"");
+        return File(pdfStream, "application/pdf");
+    }
+
+    [HttpGet("jobs/{jobId:guid}/html")]
+    public async Task<IActionResult> GetJobHtml(Guid jobId)
+    {
+        var job = await _pdfJobQueue.GetJobAsync(jobId);
+        if (job == null)
+        {
+            return NotFound(new { error = $"Job {jobId} not found." });
+        }
+
+        if (string.IsNullOrEmpty(job.HtmlData))
+        {
+            string htmlPath = System.IO.Path.Combine(AppContext.BaseDirectory, "reports_storage", $"{job.Id}.html");
+            if (System.IO.File.Exists(htmlPath))
+            {
+                job.HtmlData = await System.IO.File.ReadAllTextAsync(htmlPath);
+            }
+        }
+
+        if (string.IsNullOrEmpty(job.HtmlData))
+        {
+            return NotFound(new { error = "HTML preview not available for this job." });
+        }
+
+        return Content(job.HtmlData, "text/html; charset=utf-8");
     }
 }

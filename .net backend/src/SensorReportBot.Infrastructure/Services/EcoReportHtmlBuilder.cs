@@ -9,13 +9,37 @@ using Microsoft.Extensions.Logging;
 using SensorReportBot.Application.DTOs;
 
 /// <summary>
-/// Official Schneider Electric EcoStruxure Asset Advisor - Rotating Machine Health Report.
-/// Perfectly reproduces the visual layout, typography, palette, matrix, and gauges
-/// from the reference Schneider Electric report while binding exclusively to real TimescaleDB telemetry.
+/// Schneider Electric EcoStruxure™ Motor Predict Report HTML Builder.
+/// Generates high-fidelity, publication-grade HTML matching the official Schneider Electric reference designs:
+///   1. Cover Page: Plant emblem, Report title, Analysis Period with exact time, and Schneider branding.
+///   2. Monitoring Pages: Raw value time-series graphs for default 10 signals (2 per page) with
+///      Average, Maximum, Minimum, Last Value, Critical/Warning threshold lines and days axis.
+///   3. Alerts Page: Asset metadata, Warning vs Critical (%) pie chart, Alerts Count daily stacked bar chart,
+///      and Recent Alerts table with status pill badges (strictly real data).
+///   4. Alerts Details Page: In-depth alert cards with Status, Source, Alert Value, User settings, Start/End Time,
+///      Description, Possible Causes, and Recommended Actions.
 /// </summary>
 public class EcoReportHtmlBuilder
 {
     private readonly ILogger<EcoReportHtmlBuilder> _logger;
+
+    private static readonly string[] SignalColors = new[]
+    {
+        "#6366f1", // Indigo / Purple
+        "#f97316", // Orange
+        "#06b6d4", // Cyan
+        "#8b5cf6", // Violet
+        "#ec4899", // Pink
+        "#3b82f6", // Blue
+        "#10b981", // Emerald
+        "#f59e0b", // Amber
+        "#6366f1", // Indigo
+        "#ea580c"  // Deep Orange
+    };
+
+    // Official Schneider Electric logo supplied by user (media_1792052587714.png)
+    private const string SchneiderElectricLogoBase64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAGQAAAAeCAYAAADaW7vzAAAKmUlEQVR4AeRaf1YbORL+uvnxZrK7b50TbPsEEScY+wQLJ8D+kxCCOQHmBDZJSP40OQHkBMAJUE5gzwlC3tt9bzcT3Pt9UsuttpsEMiHJ7NRTWWqpVJKqpKqSIEWA56aFIzMijom5wxfmHV6YMzwzPQxMFkjvlB8Z8fP43Kzfqe99Efu1XnKNl1xX47PDPDMdJwfJ4sicfJb+dxB4hUgRKc7Ip0MsBZ+ggQQtLGGAVYypGLXjjiB+HnM08L1BG8uv1XAqBsto4XOQIHNykCwA9cN9QYpXZp/MbydoTYzEf+i0hFIBCSZUiMUPBCmmmFfGIR7gIbZt4vIp2sjxGv8vsIJzABdc0xskaGPLTvj9w6SUM8mIZfqAIbr2CgLlO/YcT2wHKZrcTceq/kPjlp1ws7W4pvUfTRmSqxTiha8v4SrOan2FFiIUTYzeQY4ipzdy/WWrY7pQVv2RGdKhjl2fI7NbcazPTAfPTb/Addd2ZPZJf1LQD1lX3USBt5/L0NF5B7xIe2QMeY1mODBVv+Z5jGY8NJ8U/whD1ObzfbQ+rTMm1jhHZjQb95XxaxB/BQpqYx8pZN4cZXTi6jh2nUkU852VVX9kLnlyfDCQoAUh0HH9VyHfhAqkeIQVXLJul5gV9EMGDGcUshfMMjbJc7/ATdcG9AGsF/S7rk7jo4CBaTgBeme96+j8XESrdZRzmULjdAB4/An6hgMJxfPozHgsYcS2DnExDUwWjduZ9QEWx/0JGqcDwONHZM5/e/7rUP0qTlJ8QJ+M6uxoBk+kBY0oMH2zikkT0UmqRhw6aRdsFarM4lxK0ONYIFwwj8c0VJQmyqZK0kQ17iF93QFbAt+M9CN++7SCIfm1IJCjvkaX9G1+nhKV+hRcT4Ub8aUZsC2ewwV5HCDHG9bXJwoQXvFgbkm/4VBzgAOddD8v9xn9pMhI20cVbIo9e0Vmn3PcncquXIEYSVBwMMUB7bICgRZz4UPWHxKrSRNNseZo/sscuEKABI9CcS5vk76HHasxS55BEDIXCTZnfXJs4Kk9Jv05+22w3hKBBPu4CQYmQ45SYX49LfLoO1+TY96KwJnleEMm2CD9qcN4bQmkaCyAn4/W7zebZDPFG5ksOOf2xHZoJprQ4Gpc4IByVyb4JwKI1gsr1Ph821pfiH6nOHRjqUobId59UzRVXUG1x3ymqPJ8RUGm0CnCDK5hnLBkm4UJtGgQGjTBhvliWka1vm49mIMllONKBr+hNRtXbQn8XBMYmqZy86KAHKrb46bpUYl9PLZN5qdeIShgy064IzquEehCAxVNLkug27wBIHsIBzkURqICN31MEYSDW0GCd3N0i/3nT5Zscow5SpMhZaEWtKbQEJvSULeYJ/j7rDJH5vzmTePKX2AOprigMhai1pTRTIv+oRRw6LdtjxEfvVDvnWL4+v55jvfRJCzt8sGNuASLOihPUV1rfV311eHT4y6jTslD1ECKBPIPl+64YQGkKGHZ8BFaVLxT12sVijtCirHrkeOty2//o/kE6ozHvn8jxuYv9FCeo8pjYKprRi1cRLWNG8eU+ZPliYiLYizDogr0Gr7oj1x4TFT4p9jYh6iewv8euyAAKJ2rzJciLsX3otFi5Gh1l9D3pzCFRY49PIACgi4E27bHo5ywqO9497OqJqWIj738xKLz1pxemONaWw7Cjj1HbJ5XoajSK0V9E/xCqmqaIkRwIGT0T3cflx3nU1qpSNDgxGRzFf6ts9xAAE04hUJPQLd5fYc2H23o9TRnNPaOaj4jbpbNN5Qe2yF+wzH+hRZNp0LEPk9qjycuo1KOiWXkgxtAuy/BXtTap3DGxKFDXRBX8Q5xJBYRz4rX2JuVdedZgXhcMrzWyZUDjppZlBIBLw9+Mn3ZuOwYp9Q5cUC7MT6CMY2O1iF+xlolQkrQRo7FcDD0zPFp0zMwmRPYCsZU3gnRXwaX4F+WdTsPvD6XS7FAFwmCrZYAdwHssq7FXGs4mM2fFQtpx2rHlzwSaDMa9gdBbczm0rbts32P+OXjzrH0J0QOfNu28AAP6RDbBSqGX2Nd0+3UrtWiyu5b1kdkKZqk3yB6Z3qNLvs8pKLXHbHaA/4NfmEvTI87z9/Y/cJRA/2Fy5x2ZeClXHMIHbUGhY5TtCEzOMVBkbc5H62h70jlA0UTsJ7HBrQO0TxAk/273DDNAnXhdKzcjzbDbcb9D64oo/YM/wqLGkgrdV17Red0XuApFWGhugrR3MeWnZD+lOid6VN7XOmj9oBde8VTMUKCAVE70DPTadJpC5jgHIIEi3Z5y07cTlcumnmU0p7YoZuPz88r89mz8Rr9OIs8TmeXyy7phVv2647btVfzw+q7qhDV3Ce+nHueSDBxO+aJNTxRnRleIwQNjYoj1l8c479AqiwfgQhemjMq3UQ137cYgp1bzuLbKWRgMpqB9wi7XxOUH9KOVlkoget2naIMCKaIT5LKGZXYnWHVoYP1TaLo8N1Bykhwcpd5fBuFDEwDP3Fay4hD1GNnelCAaFJOfgkD1jwkKsi4wAdM4KH8lRID3nS3KKm/Tsn/ZfVuvDS3n7F2l07fRiF6jZ1izJ07Rg5FPSBI4MyKtIxQ/5q+Sw+UHmXz8TtBQYT+VOBxd4GbNoP+hhFMoO5RMZFM7RQKMmQOqzte/XSqRSP+OuUoQCfk36jSqymezwujDahah99GIX9Bz0UoilowAzsrqZDCKyTHJn3A2OFLs4k6kOBKHNWRzOqemQ7H3uVm2GNdFwl6vPP4sVCALoIJfnE0OQ5JnxUt4J2ogRy6qMocviZNNdRP8IjvWPus/xUKTuIXbJnbBC3EoPkoWMkhXnvs8z5uvn+FDEzGi18PH9HhQnfh4YqnwPri7NffhqfYo685cJigeooC6RRdCsBj9dUgUJT5Eta56CtiRp6GueU8fEgOguani2D8fK4Qmk0u6YRO4cP1p5aY0ZsvowLnDEiGxA7b6yO3QL6MTeQ4IO3Q0e7YfmhSfv8KWcE6BeAvfTmaACTkQ+Zl8kIxrLBIMHF4jdOKj0EEwX8ol52OmmqLejxMkJFvRkW+JZZCW0UDgi07UfZFOMWvt+43RZPj14a84nH/CtEoQgla4a0uoNu23BWy36s4EQnRUHlnxE1oZ7LiKyRLAYC70d+Tdjj2R1gE8EHD1YIZC+3KU9woQNwV9HeSJXhrUNP3/hUyhV9MDuvuFK9MNsufmR7fvnRjNwigCT/AXviszXX3iLGWqKjUu1uKzPmkIzPi7f+MY+4jgBSf4ICbwDts0Tw3w9Ds8qA0PbhqXK3BNXzBT4oeErQ4j0vOaUQcI4L7V4hMj3d069yp4wr6EDeL5nPIP46toWu9EqMGV9T/VPknDTnEEl1j8ZOjh2WU5scLvI0cMpNyoG8wr/DHdkiFyJS8Jd1b9q8qRDxSrHHuaj+smNJrSJl1fgX0mzqdbcSwZSdI0EaCQzeW/GHUfv8K0WISxK+i0fBFMcGEi23T0ffwKdBintpj96wR53EfPRKKLq7T9xM7dPyVd+2iwresnoD6ztmqHPdXWXUyd+Kv74Cf8mNau9oDbcjFS4GD5jLXfv8K0SS0A6dosyiH7oWRQ2HiGypig6eiSRtfOloS/lnT/wAAAP//+WCuowAAAAZJREFUAwAGka6kjucQ4wAAAABJRU5ErkJggg==";
 
     public EcoReportHtmlBuilder(ILogger<EcoReportHtmlBuilder> logger)
     {
@@ -25,45 +49,51 @@ public class EcoReportHtmlBuilder
     public string Build(EcoReportModel model)
     {
         var e = model.Evidence;
-        var sb = new StringBuilder(120_000);
+        var sb = new StringBuilder(180_000);
 
-        int pageNum = 1;
+        // Take 10 signals by default (prioritizing those with alerts/excursions)
+        var signals = (e.Signals != null && e.Signals.Count > 0)
+            ? e.Signals.Take(10).ToList()
+            : new List<SignalEvidenceDto>();
 
-        sb.Append(BuildHead(e.Asset.Name, e.From, e.To));
+        // 2 signals per monitoring page
+        int monitoringPagesCount = Math.Max(1, (int)Math.Ceiling(signals.Count / 2.0));
 
-        // Page 1: Official Cover Page
-        sb.Append(BuildCoverPage(model));
-        pageNum++;
+        // Alerts details pagination (up to 3 alert items per page) - strictly real alerts from database
+        var alerts = e.TopAlerts ?? new List<AlertEvidenceDto>();
+        int alertsDetailsPages = alerts.Count > 0
+            ? (int)Math.Ceiling(alerts.Count / 3.0)
+            : 0;
 
-        // Page 2: Executive Summary & Context & Health Matrix
-        sb.Append(BuildExecutiveSummaryPage(model, pageNum++));
+        int totalPages = 1 + monitoringPagesCount + 1 + alertsDetailsPages; // Cover + Monitoring + Alerts (+ Alerts Details if real alerts exist)
+        int currentPage = 1;
 
-        // Page 3: Rotating Equipment & Matrix
-        sb.Append(BuildRotatingEquipmentPage(model, pageNum++));
+        sb.Append(BuildHead(e.Asset?.Name ?? "Motor", e.From, e.To));
 
-        // Page 4: Asset Analysis & Health Index Indicators
-        sb.Append(BuildAssetAnalysisPage(model, pageNum++));
+        // ── Page 1: Cover Page ─────────────────────────────────────────────
+        sb.Append(BuildCoverPage(model, currentPage++, totalPages));
 
-        // Pages 5-6: Motor Deep-Dive (Gauges, Worst Score Grid, Power Supply Charts)
-        foreach (var motor in e.MotorDetails)
+        // ── Pages 2+: Monitoring Pages (2 signal cards per page) ───────────
+        for (int i = 0; i < signals.Count; i += 2)
         {
-            sb.Append(BuildMotorDeepDivePage1(model, motor, pageNum++));
-            sb.Append(BuildMotorDeepDivePage2(model, motor, pageNum++));
+            var pageSignals = signals.Skip(i).Take(2).ToList();
+            sb.Append(BuildMonitoringPage(model, pageSignals, i, currentPage++, totalPages));
         }
 
-        // Page 7: AI Engineering Diagnostics & Maintenance Action Plan
-        sb.Append(BuildAiDiagnosticsPage(model, pageNum++));
+        // ── Alerts Overview Page ───────────────────────────────────────────
+        sb.Append(BuildAlertsPage(model, currentPage++, totalPages));
 
-        // Page 8: Appendix (Health Index Definitions)
-        sb.Append(BuildAppendixPage(model, pageNum++));
+        // ── Alerts Details Page(s) (All Alerts Displayed Without Truncation) ─
+        if (alerts.Count > 0)
+        {
+            for (int i = 0; i < alerts.Count; i += 3)
+            {
+                var pageAlerts = alerts.Skip(i).Take(3).ToList();
+                sb.Append(BuildAlertsDetailsPage(model, pageAlerts, currentPage++, totalPages));
+            }
+        }
 
-        // Page 9: Asset Specifications
-        sb.Append(BuildAssetDetailsPage(model, pageNum++));
-
-        // Page 10: Official Schneider Electric Back Cover
-        sb.Append(BuildBackCover(pageNum));
-
-        sb.Append("</body></html>");
+        sb.Append("</body>\n</html>");
         return sb.ToString();
     }
 
@@ -75,50 +105,219 @@ public class EcoReportHtmlBuilder
         return
             "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n" +
             "<meta charset=\"UTF-8\"/>\n" +
-            $"<title>EcoStruxure Asset Advisor — {H(assetName)} — {from:yyyy-MM-dd} to {to:yyyy-MM-dd}</title>\n" +
+            $"<title>EcoStruxure™ Motor Predict — {H(assetName)} — {from:MMM dd, yyyy hh:mm tt} to {to:MMM dd, yyyy hh:mm tt}</title>\n" +
             "<style>\n" +
-            "*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}\n" +
-            "html,body{width:210mm;background:#fff;font-family:'Segoe UI',Arial,sans-serif;font-size:8.5pt;color:#222;line-height:1.45}\n" +
-            ".page{width:210mm;min-height:297mm;height:297mm;padding:12mm 16mm 16mm 16mm;position:relative;background:#fff;page-break-after:always;page-break-inside:avoid;overflow:hidden}\n" +
-            ".page:last-child{page-break-after:auto}\n" +
-            "@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}.page{page-break-after:always;margin:0}.page:last-child{page-break-after:auto}}\n" +
-            ".sect-title{font-size:10.5pt;font-weight:700;color:#009E4D;margin-bottom:6px}\n" +
-            ".sub-title{font-size:9pt;font-weight:700;color:#009E4D;margin:10px 0 4px 0}\n" +
-            ".top-ribbon{background:#009E4D;color:#fff;font-size:10pt;font-weight:700;padding:5px 12px;margin:-12mm -16mm 14px -16mm;text-align:center;letter-spacing:.5px}\n" +
-            ".pf{position:absolute;bottom:8mm;left:16mm;right:16mm;display:flex;justify-content:space-between;align-items:center;font-size:7.5pt;color:#777;border-top:1px solid #e0e0e0;padding-top:4px}\n" +
-            ".pf-brand{color:#009E4D;font-weight:600}\n" +
-            ".ctx-row{display:flex;gap:8px;margin:8px 0 14px 0}\n" +
-            ".ctx-card{flex:1;background:#009E4D;color:#fff;border-radius:4px;padding:8px 4px;text-align:center}\n" +
-            ".ctx-num{font-size:14pt;font-weight:700;line-height:1.1}\n" +
-            ".ctx-lbl{font-size:6.5pt;margin-top:2px;line-height:1.1}\n" +
-            "table{width:100%;border-collapse:collapse;margin:8px 0;font-size:7.5pt}\n" +
-            "th{background:#009E4D;color:#fff;padding:5px 6px;text-align:left;font-weight:600}\n" +
-            "td{padding:4px 6px;border-bottom:1px solid #e5e7eb}\n" +
-            "tr:nth-child(even){background:#f9fafb}\n" +
-            ".matrix-wrap{display:flex;flex-direction:column;align-items:center;margin:8px 0 12px 0;padding:8px;background:#fff;border-radius:6px}\n" +
-            ".matrix-header{display:flex;justify-content:flex-end;width:100%;margin-bottom:4px}\n" +
-            ".matrix-badge{border:1px solid #009E4D;color:#009E4D;font-size:7.5pt;padding:2px 8px;border-radius:3px;font-weight:600}\n" +
-            ".matrix-grid{display:grid;grid-template-columns:80px repeat(3, 48px);grid-gap:8px;align-items:center;text-align:center}\n" +
-            ".matrix-cell-dot{width:22px;height:22px;border-radius:50%;margin:0 auto;display:flex;align-items:center;justify-content:center;font-size:7.5pt;font-weight:700;color:#fff}\n" +
-            ".dot-good{background:#009E4D}\n" +
-            ".dot-med{background:#F5A623}\n" +
-            ".dot-poor{background:#D93025}\n" +
-            ".matrix-lbl{font-size:7pt;color:#666;text-align:right;padding-right:6px}\n" +
-            ".matrix-axis{font-size:7pt;font-weight:700;color:#444;text-align:center;margin-top:4px}\n" +
-            ".inference-line{font-size:8pt;font-weight:700;color:#111;margin:6px 0;line-height:1.4}\n" +
-            ".ai-bold{font-weight:700;color:#111}\n" +
-            ".threshold-callout{font-size:7.5pt;margin:3px 0}\n" +
-            ".th-yellow{color:#b45309;font-weight:600}\n" +
-            ".th-red{color:#dc2626;font-weight:600}\n" +
-            ".donut-badge{width:54px;height:54px;border-radius:50%;border:4px solid #009E4D;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}\n" +
-            ".donut-val{font-size:11pt;font-weight:700;color:#009E4D;line-height:1}\n" +
-            ".donut-sub{font-size:5.5pt;color:#666;margin-top:1px}\n" +
-            ".ws-grid{display:grid;grid-template-columns:repeat(3, 1fr);grid-gap:6px;margin:6px 0}\n" +
-            ".ws-card{border:1px solid #e5e7eb;border-radius:3px;padding:5px 6px;background:#fff}\n" +
-            ".ws-title{font-size:7pt;font-weight:700;color:#009E4D}\n" +
-            ".ws-sub{font-size:6pt;color:#777;margin-bottom:2px}\n" +
-            ".ws-row{display:flex;justify-content:space-between;font-size:6pt;color:#555}\n" +
-            ".ws-score{font-size:7pt;font-weight:700;color:#222}\n" +
+            "*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }\n" +
+            "html, body {\n" +
+            "  width: 210mm;\n" +
+            "  background: #ffffff;\n" +
+            "  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;\n" +
+            "  color: #222222;\n" +
+            "  -webkit-print-color-adjust: exact;\n" +
+            "  print-color-adjust: exact;\n" +
+            "}\n" +
+            "@page {\n" +
+            "  size: A4 portrait;\n" +
+            "  margin: 0;\n" +
+            "}\n" +
+            ".page {\n" +
+            "  width: 210mm;\n" +
+            "  height: 297mm;\n" +
+            "  max-height: 297mm;\n" +
+            "  padding: 13mm 16mm 14mm 16mm;\n" +
+            "  position: relative;\n" +
+            "  background: #ffffff;\n" +
+            "  page-break-after: always;\n" +
+            "  page-break-inside: avoid;\n" +
+            "  overflow: hidden;\n" +
+            "}\n" +
+            ".page:last-child { page-break-after: auto; }\n" +
+            "@media print {\n" +
+            "  body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }\n" +
+            "  .page { page-break-after: always; margin: 0; }\n" +
+            "  .page:last-child { page-break-after: auto; }\n" +
+            "}\n" +
+            "\n" +
+            "/* Header */\n" +
+            ".brand-header { margin-bottom: 8px; }\n" +
+            ".brand-hub { font-size: 11pt; color: #555555; font-weight: 500; margin-bottom: 2px; }\n" +
+            ".brand-title { font-size: 20pt; font-weight: 700; color: #00d35a; letter-spacing: -0.2px; }\n" +
+            "\n" +
+            "/* Footer */\n" +
+            ".page-footer {\n" +
+            "  position: absolute;\n" +
+            "  bottom: 11mm;\n" +
+            "  left: 16mm;\n" +
+            "  right: 16mm;\n" +
+            "}\n" +
+            ".pf-top {\n" +
+            "  display: flex;\n" +
+            "  justify-content: space-between;\n" +
+            "  align-items: center;\n" +
+            "  font-size: 8pt;\n" +
+            "  color: #374151;\n" +
+            "  margin-bottom: 6px;\n" +
+            "}\n" +
+            ".pf-top strong { font-weight: 700; color: #111827; }\n" +
+            ".pf-page-num { color: #00d35a; font-weight: 600; }\n" +
+            ".pf-line { height: 1px; background: #e5e7eb; width: 100%; margin-bottom: 8px; }\n" +
+            ".pf-bottom {\n" +
+            "  display: flex;\n" +
+            "  justify-content: space-between;\n" +
+            "  align-items: center;\n" +
+            "}\n" +
+            ".pill-btn {\n" +
+            "  background-color: #00d35a;\n" +
+            "  color: #ffffff;\n" +
+            "  font-size: 7.5pt;\n" +
+            "  font-weight: 600;\n" +
+            "  padding: 4px 14px;\n" +
+            "  border-radius: 9999px;\n" +
+            "  display: inline-block;\n" +
+            "  text-decoration: none;\n" +
+            "}\n" +
+            "\n" +
+            "/* Cover Page */\n" +
+            ".cover-body {\n" +
+            "  position: absolute;\n" +
+            "  top: 48%;\n" +
+            "  left: 50%;\n" +
+            "  transform: translate(-50%, -50%);\n" +
+            "  display: flex;\n" +
+            "  flex-direction: column;\n" +
+            "  align-items: center;\n" +
+            "  text-align: center;\n" +
+            "  width: 100%;\n" +
+            "}\n" +
+            ".cover-plant { font-size: 15pt; font-weight: 600; color: #1f2937; margin: 10px 0 14px 0; }\n" +
+            ".cover-report-text { font-size: 32pt; font-weight: 600; color: #00d35a; margin-bottom: 12px; }\n" +
+            ".cover-analysis-period { font-size: 9.5pt; color: #374151; }\n" +
+            ".cover-analysis-period strong { font-weight: 700; color: #111827; }\n" +
+            "\n" +
+            "/* Monitoring Page */\n" +
+            ".monitoring-title { font-size: 13.5pt; font-weight: 600; color: #222222; margin: 12px 0 16px 0; }\n" +
+            ".signal-card {\n" +
+            "  border: 1px solid #e5e7eb;\n" +
+            "  border-radius: 4px;\n" +
+            "  padding: 12px 16px 10px 16px;\n" +
+            "  margin-bottom: 18px;\n" +
+            "  background: #ffffff;\n" +
+            "}\n" +
+            ".signal-name { font-size: 12pt; font-weight: 500; color: #4b5563; margin-bottom: 10px; }\n" +
+            ".metrics-row { display: flex; gap: 40px; margin-bottom: 10px; }\n" +
+            ".metric-box { display: flex; flex-direction: column; }\n" +
+            ".metric-lbl { font-size: 6.5pt; font-weight: 700; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; }\n" +
+            ".metric-val { font-size: 14pt; font-weight: 700; color: #111827; margin-top: 1px; line-height: 1.1; }\n" +
+            ".legend-row {\n" +
+            "  display: flex;\n" +
+            "  gap: 20px;\n" +
+            "  margin-top: 6px;\n" +
+            "  margin-left: 36px;\n" +
+            "  font-size: 6.5pt;\n" +
+            "  font-weight: 700;\n" +
+            "  color: #4b5563;\n" +
+            "  align-items: center;\n" +
+            "}\n" +
+            ".legend-item { display: flex; align-items: center; gap: 6px; }\n" +
+            ".crit-dots { width: 18px; border-bottom: 2px dotted #dc2626; }\n" +
+            ".warn-dots { width: 18px; border-bottom: 2px dotted #f59e0b; }\n" +
+            "\n" +
+            "/* Alerts Page */\n" +
+            ".alerts-heading { font-size: 13.5pt; font-weight: 600; color: #222222; margin: 8px 0 8px 0; }\n" +
+            ".asset-meta-list { font-size: 8pt; color: #374151; line-height: 1.45; margin-bottom: 12px; }\n" +
+            ".asset-meta-list strong { font-weight: 700; color: #111827; }\n" +
+            ".alerts-widgets-grid { display: flex; gap: 14px; margin-bottom: 14px; }\n" +
+            ".widget-card {\n" +
+            "  border: 1px solid #e5e7eb;\n" +
+            "  border-radius: 4px;\n" +
+            "  padding: 10px 14px;\n" +
+            "  background: #ffffff;\n" +
+            "}\n" +
+            ".widget-header { font-size: 9.5pt; font-weight: 600; color: #374151; margin-bottom: 6px; }\n" +
+            ".recent-alerts-hdr { font-size: 11pt; font-weight: 600; color: #374151; margin-bottom: 6px; }\n" +
+            ".alerts-table {\n" +
+            "  width: 100%;\n" +
+            "  border-collapse: collapse;\n" +
+            "  font-size: 7.5pt;\n" +
+            "}\n" +
+            ".alerts-table th {\n" +
+            "  font-size: 7.5pt;\n" +
+            "  font-weight: 600;\n" +
+            "  color: #374151;\n" +
+            "  padding: 5px 8px;\n" +
+            "  text-align: left;\n" +
+            "  border-bottom: 1px solid #e5e7eb;\n" +
+            "}\n" +
+            ".alerts-table td {\n" +
+            "  font-size: 7.5pt;\n" +
+            "  color: #374151;\n" +
+            "  padding: 4px 8px;\n" +
+            "  border-bottom: 1px solid #f3f4f6;\n" +
+            "  vertical-align: middle;\n" +
+            "}\n" +
+            ".alerts-table tr:nth-child(even) td { background-color: #fafafa; }\n" +
+            ".badge-crit {\n" +
+            "  display: inline-flex;\n" +
+            "  align-items: center;\n" +
+            "  gap: 3px;\n" +
+            "  padding: 1.5px 7px;\n" +
+            "  border-radius: 3px;\n" +
+            "  background-color: #fee2e2;\n" +
+            "  border: 1px solid #fca5a5;\n" +
+            "  color: #dc2626;\n" +
+            "  font-size: 6.8pt;\n" +
+            "  font-weight: 700;\n" +
+            "}\n" +
+            ".badge-warn {\n" +
+            "  display: inline-flex;\n" +
+            "  align-items: center;\n" +
+            "  gap: 3px;\n" +
+            "  padding: 1.5px 7px;\n" +
+            "  border-radius: 3px;\n" +
+            "  background-color: #fef9c3;\n" +
+            "  border: 1px solid #fde047;\n" +
+            "  color: #b45309;\n" +
+            "  font-size: 6.8pt;\n" +
+            "  font-weight: 700;\n" +
+            "}\n" +
+            "\n" +
+            "/* Alerts Details Page */\n" +
+            ".alert-detail-item { margin-bottom: 18px; }\n" +
+            ".adi-header { display: flex; justify-content: space-between; gap: 24px; margin-bottom: 6px; font-size: 8pt; }\n" +
+            ".adi-left { flex: 1; }\n" +
+            ".adi-right { flex: 1; }\n" +
+            ".adi-row { display: flex; align-items: center; gap: 6px; margin-bottom: 3.5px; }\n" +
+            ".adi-lbl { font-size: 8pt; font-weight: 700; color: #111827; }\n" +
+            ".adi-val { font-size: 8pt; color: #374151; }\n" +
+            ".adi-fixed { margin-top: 5px; }\n" +
+            ".adi-desc-wrap { margin-top: 5px; }\n" +
+            ".adi-desc-lbl { font-size: 8pt; font-weight: 700; color: #111827; margin-bottom: 1px; }\n" +
+            ".adi-desc-text { font-size: 7.5pt; color: #374151; line-height: 1.35; }\n" +
+            ".adi-box {\n" +
+            "  background: #f4f6f8;\n" +
+            "  border-radius: 4px;\n" +
+            "  padding: 9px 14px;\n" +
+            "  display: flex;\n" +
+            "  gap: 24px;\n" +
+            "}\n" +
+            ".adi-box-col { flex: 1; }\n" +
+            ".adi-box-hdr { font-size: 8pt; font-weight: 700; color: #111827; margin-bottom: 5px; }\n" +
+            ".adi-bullet-list { list-style-type: none; padding-left: 0; margin: 0; }\n" +
+            ".adi-bullet-list li {\n" +
+            "  position: relative;\n" +
+            "  padding-left: 12px;\n" +
+            "  font-size: 7.2pt;\n" +
+            "  color: #374151;\n" +
+            "  margin-bottom: 2.5px;\n" +
+            "  line-height: 1.25;\n" +
+            "}\n" +
+            ".adi-bullet-list li::before {\n" +
+            "  content: '•';\n" +
+            "  position: absolute;\n" +
+            "  left: 2px;\n" +
+            "  color: #111827;\n" +
+            "  font-size: 8.5pt;\n" +
+            "}\n" +
             "</style>\n" +
             "</head>\n<body>\n";
     }
@@ -126,506 +325,637 @@ public class EcoReportHtmlBuilder
     // ═══════════════════════════════════════════════════════════════════════
     // PAGE 1 — COVER PAGE
     // ═══════════════════════════════════════════════════════════════════════
-    private static string BuildCoverPage(EcoReportModel m)
+    private static string BuildCoverPage(EcoReportModel m, int pageNum, int totalPages)
     {
         var e = m.Evidence;
-        string hColor = GetHealthColor(e.OverallHealth);
-        return
-            "<div class=\"page\" style=\"padding:0;\">\n" +
-            "  <div style=\"height:90mm;\"></div>\n" +
-            "  <div style=\"background:#009E4D;color:#fff;padding:24px 20mm;\">\n" +
-            "    <div style=\"font-size:15pt;font-weight:700;line-height:1.2;\">EcoStruxure</div>\n" +
-            "    <div style=\"font-size:10pt;font-weight:400;margin-bottom:14px;\">Asset Advisor</div>\n" +
-            "    <div style=\"font-size:19pt;font-weight:700;\">Quarterly Report- Rotating machine</div>\n" +
-            "  </div>\n" +
-            "  <div style=\"padding:20px 20mm;\">\n" +
-            $"    <div style=\"font-size:13pt;font-weight:700;color:#007A3C;margin-bottom:4px;\">{H(e.Asset.Name)}</div>\n" +
-            $"    <div style=\"font-size:8.5pt;font-weight:600;color:#009E4D;margin-bottom:20px;\">Analysis Period: {e.From:MMMM yyyy} to {e.To:MMMM yyyy}</div>\n" +
-            "    <div style=\"display:grid;grid-template-columns:1fr 1fr 1fr;grid-gap:16px;font-size:7.5pt;\">\n" +
-            $"      <div><div style=\"color:#444;font-weight:600;\">Created on</div><div style=\"color:#777;\">{m.GeneratedAt:yyyy-MM-dd}</div></div>\n" +
-            $"      <div><div style=\"color:#444;font-weight:600;\">Asset Type</div><div style=\"color:#777;\">{H(e.Asset.AssetType)}</div></div>\n" +
-            $"      <div><div style=\"color:#444;font-weight:600;\">Location</div><div style=\"color:#777;\">{H(e.Asset.Location ?? "Main Plant")}</div></div>\n" +
-            $"      <div><div style=\"color:#444;font-weight:600;\">Monitored Signals</div><div style=\"color:#777;\">{e.Signals.Count} Channels</div></div>\n" +
-            $"      <div><div style=\"color:#444;font-weight:600;\">Health Status</div><div style=\"color:{hColor};font-weight:700;\">{H(e.OverallHealth.ToUpperInvariant())} ({e.HealthScore}/100)</div></div>\n" +
-            $"      <div><div style=\"color:#444;font-weight:600;\">System</div><div style=\"color:#777;\">EcoStruxure Asset Advisor</div></div>\n" +
-            "    </div>\n" +
-            "  </div>\n" +
-            "  <div style=\"position:absolute;bottom:12mm;left:20mm;right:20mm;display:flex;justify-content:space-between;align-items:center;\">\n" +
-            "    <div style=\"background:#009E4D;color:#fff;font-size:7.5pt;font-weight:600;padding:4px 14px;border-radius:12px;\">www.se.com</div>\n" +
-            "    <div style=\"font-size:7.5pt;color:#444;\">Life Is On &nbsp;|&nbsp; <span style=\"color:#009E4D;font-weight:700;\">Schneider Electric</span></div>\n" +
-            "  </div>\n" +
-            "</div>\n";
-    }
+        string plantName = !string.IsNullOrWhiteSpace(e.Asset?.Location) && e.Asset.Location != "Main Plant"
+            ? $"{e.Asset.Location} Refinery"
+            : "Hunt Refinery";
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // PAGE 2 — EXECUTIVE SUMMARY & CONTEXT & ASSET HEALTH
-    // ═══════════════════════════════════════════════════════════════════════
-    private static string BuildExecutiveSummaryPage(EcoReportModel m, int pageNum)
-    {
-        var e = m.Evidence;
-        var n = m.Narrative;
-        var c = e.Context;
+        // Actual time included in analysis period
+        string analysisPeriod = $"{e.From:MMM dd, yyyy hh:mm:ss tt} - {e.To:MMM dd, yyyy hh:mm:ss tt}";
 
         return
             "<div class=\"page\">\n" +
-            "  <div class=\"sect-title\">1. Executive Summary</div>\n" +
-            $"  <div style=\"font-size:8pt;color:#111;font-weight:700;margin-bottom:12px;padding:10px 14px;background:#F4F6F8;border-left:3.5px solid #009E4D;border-radius:0 4px 4px 0;line-height:1.5;\"><div style=\"font-size:7.5pt;font-weight:700;color:#009E4D;margin-bottom:3px;\">&#9679; AI Engineering Diagnostic Overview</div><b>{H(n.ExecutiveSummary)}</b></div>\n" +
-            "  <div class=\"sub-title\">1.1. Context</div>\n" +
-            "  <div class=\"ctx-row\">\n" +
-            $"    <div class=\"ctx-card\"><div class=\"ctx-num\">1</div><div class=\"ctx-lbl\">Monitored<br/>Machine</div></div>\n" +
-            $"    <div class=\"ctx-card\"><div class=\"ctx-num\">{c.MonitoredSignals}</div><div class=\"ctx-lbl\">Telemetry<br/>Channels</div></div>\n" +
-            $"    <div class=\"ctx-card\"><div class=\"ctx-num\">{c.ExcursionsCount}</div><div class=\"ctx-lbl\">Excursion<br/>Events</div></div>\n" +
-            $"    <div class=\"ctx-card\"><div class=\"ctx-num\">{c.ActiveAlertsCount}</div><div class=\"ctx-lbl\">Active<br/>Alerts</div></div>\n" +
+            "  <div class=\"brand-header\">\n" +
+            "    <div class=\"brand-hub\">Industrial Services Hub</div>\n" +
+            "    <div class=\"brand-title\">EcoStruxure™ Motor Predict</div>\n" +
             "  </div>\n" +
-            "  <div class=\"sub-title\">1.2. Asset Health</div>\n" +
-            "  <div style=\"font-size:7.5pt;color:#444;margin-bottom:4px;\">The following Health Matrix summarizes the asset health status of the asset computed by the platform and evaluated by automated diagnostics.</div>\n" +
-            BuildHealthMatrixSvg(e.OverallHealth) +
-            $"  <div class=\"inference-line\" style=\"margin-top:8px;\"><b>{H(n.HealthMatrixInference)}</b></div>\n" +
-            PageFooter(pageNum) +
+            "  <div class=\"cover-body\">\n" +
+            "    <!-- Hunt Refining Company Logo -->\n" +
+            "    <svg width=\"230\" height=\"56\" viewBox=\"0 0 230 56\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">\n" +
+            "      <g transform=\"skewX(-14)\">\n" +
+            "        <text x=\"38\" y=\"35\" font-family=\"'Arial Black', 'Impact', sans-serif\" font-weight=\"900\" font-size=\"35\" fill=\"#0c2340\">h</text>\n" +
+            "        <g transform=\"translate(65, 14)\">\n" +
+            "          <circle cx=\"11\" cy=\"11\" r=\"10.5\" fill=\"#0080c8\" stroke=\"#0c2340\" stroke-width=\"1.8\"/>\n" +
+            "          <ellipse cx=\"11\" cy=\"11\" rx=\"10\" ry=\"4.5\" fill=\"none\" stroke=\"#ffffff\" stroke-width=\"1\"/>\n" +
+            "          <ellipse cx=\"11\" cy=\"11\" rx=\"4.5\" ry=\"10\" fill=\"none\" stroke=\"#ffffff\" stroke-width=\"1\"/>\n" +
+            "          <line x1=\"1\" y1=\"11\" x2=\"21\" y2=\"11\" stroke=\"#ffffff\" stroke-width=\"1\"/>\n" +
+            "          <line x1=\"11\" y1=\"1\" x2=\"11\" y2=\"21\" stroke=\"#ffffff\" stroke-width=\"1\"/>\n" +
+            "        </g>\n" +
+            "        <text x=\"94\" y=\"35\" font-family=\"'Arial Black', 'Impact', sans-serif\" font-weight=\"900\" font-size=\"35\" fill=\"#0c2340\">nt</text>\n" +
+            "      </g>\n" +
+            "      <text x=\"115\" y=\"50\" text-anchor=\"middle\" font-family=\"'Segoe UI', Arial, sans-serif\" font-weight=\"700\" font-size=\"8.5\" fill=\"#0c2340\" letter-spacing=\"2.8px\">REFINING COMPANY</text>\n" +
+            "    </svg>\n" +
+            $"    <div class=\"cover-plant\">{H(plantName)}</div>\n" +
+            "    <div class=\"cover-report-text\">Report</div>\n" +
+            $"    <div class=\"cover-analysis-period\"><strong>Analysis Period:</strong> {analysisPeriod}</div>\n" +
+            "  </div>\n" +
+            BuildPageFooter(m.GeneratedAt, pageNum) +
             "</div>\n";
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // PAGE 3 — ROTATING EQUIPMENT & MATRIX
+    // MONITORING PAGE (2 Signals Per Page)
     // ═══════════════════════════════════════════════════════════════════════
-    private static string BuildRotatingEquipmentPage(EcoReportModel m, int pageNum)
+    private static string BuildMonitoringPage(
+        EcoReportModel m, 
+        List<SignalEvidenceDto> pageSignals, 
+        int startIndex, 
+        int pageNum, 
+        int totalPages)
     {
         var e = m.Evidence;
-        var n = m.Narrative;
-        string hColor = GetHealthColor(e.OverallHealth);
+        string siteName = !string.IsNullOrWhiteSpace(e.Asset?.Location) ? e.Asset.Location : "Compressor Room";
+        string assetName = !string.IsNullOrWhiteSpace(e.Asset?.Name) ? e.Asset.Name : "Air Compressor Motor";
 
-        return
-            "<div class=\"page\">\n" +
-            "  <div class=\"top-ribbon\">ROTATING EQUIPMENT</div>\n" +
-            "  <div class=\"sect-title\">1.3. Rotating Equipment</div>\n" +
-            $"  <div style=\"font-size:8pt;color:#333;margin-bottom:12px;\">1 rotating equipment is connected to cloud platform ({H(e.Asset.Name)}).</div>\n" +
-            "  <div class=\"sub-title\">1.3.1. Health Matrix</div>\n" +
-            "  <div style=\"font-size:7.5pt;color:#444;margin-bottom:4px;\">The following Health Matrix summarizes the connected rotating equipment's health computed by the EAA platform.</div>\n" +
-            BuildHealthMatrixSvg(e.OverallHealth) +
-            "  <div style=\"font-size:8pt;color:#333;margin-top:10px;\">The health of the asset is the following:</div>\n" +
-            $"  <div class=\"inference-line\" style=\"font-weight:600;\">&bull; 1 Induction motor is in <span style=\"color:{hColor};\">{e.OverallHealth.ToLowerInvariant()} health</span> at medium criticality.</div>\n" +
-            PageFooter(pageNum) +
-            "</div>\n";
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // PAGE 4 — ASSET ANALYSIS & SUBCOMPONENT BARS
-    // ═══════════════════════════════════════════════════════════════════════
-    private static string BuildAssetAnalysisPage(EcoReportModel m, int pageNum)
-    {
-        var e = m.Evidence;
-        var n = m.Narrative;
         var sb = new StringBuilder();
-        string hColor = GetHealthColor(e.OverallHealth);
-        string badgeNum = GetHealthBadge(e.OverallHealth).Substring(0, 1);
-
         sb.Append("<div class=\"page\">\n");
-        sb.Append("  <div class=\"sect-title\">1.4. Asset analysis</div>\n");
-        sb.Append($"  <div style=\"font-size:8pt;color:#333;margin-bottom:6px;\">The following table summarizes the partial health status of the asset that is in <span style=\"color:{hColor};font-weight:700;\">{H(e.OverallHealth)} health</span>.</div>\n");
-        sb.Append("  <table><thead><tr><th>Motor details</th><th>Motor Electrical health</th><th>Motor component health</th><th>Load Health</th><th>Shaft train health</th><th>Health Status</th></tr></thead><tbody>\n");
-
-        foreach (var row in e.AssetAnalysisRows)
-        {
-            sb.Append($"<tr><td><b>{H(row.AssetName)}</b></td><td>{row.MotorElectricalHealth}</td><td>{row.MotorComponentHealth}</td><td>{row.LoadHealth}</td><td>{row.ShaftTrainHealth}</td><td style=\"color:{hColor};font-weight:700;\">{H(row.HealthStatus)}</td></tr>\n");
-        }
-
-        sb.Append("  </tbody></table>\n");
-        sb.Append($"  <div class=\"inference-line\" style=\"margin:8px 0 4px 0;\"><b>{H(n.AssetAnalysisInference)}</b></div>\n");
-        sb.Append("  <div style=\"margin:8px 0 12px 0;\">\n");
-        sb.Append(HealthStatusBar("Motor electrical health", hColor));
-        sb.Append(HealthStatusBar("Motor mechanical health", hColor));
-        sb.Append(HealthStatusBar("Shaft train health", hColor));
-        sb.Append("<div style=\"height:1px;background:#e5e7eb;margin:6px 0;\"></div>\n");
-        sb.Append(HealthStatusBar("Current fault index", hColor));
-        sb.Append(HealthStatusBar("Speed fault index", hColor));
+        sb.Append("  <div class=\"brand-header\">\n");
+        sb.Append("    <div class=\"brand-hub\">Industrial Services Hub</div>\n");
+        sb.Append("    <div class=\"brand-title\">EcoStruxure™ Motor Predict</div>\n");
         sb.Append("  </div>\n");
-        sb.Append("  <div style=\"font-size:7.5pt;color:#555;margin-bottom:4px;\">For details on the recommendation on each Health Index please refer to <b>Appendix</b></div>\n");
-        sb.Append($"  <div style=\"font-size:8pt;font-weight:600;color:#333;margin-bottom:3px;\">The health index {badgeNum} indicates that:</div>\n");
-
-        var bulletPoints = (n.HealthIndexBulletPoints != null && n.HealthIndexBulletPoints.Any())
-            ? n.HealthIndexBulletPoints
-            : new List<string> { "Failed to get inference from LLM." };
-
-        foreach (var bp in bulletPoints)
-        {
-            sb.Append($"  <div style=\"font-size:7.5pt;font-weight:700;color:#111;margin:2px 0 2px 10px;\">&bull; <b>{H(bp)}</b></div>\n");
-        }
-
-        sb.Append(PageFooter(pageNum));
-        sb.Append("</div>\n");
-        return sb.ToString();
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // PAGE 5 — MOTOR INSIGHTS & 8 SPEEDOMETER GAUGES
-    // ═══════════════════════════════════════════════════════════════════════
-    private static string BuildMotorDeepDivePage1(EcoReportModel m, MotorDetailSectionDto motor, int pageNum)
-    {
-        var e = m.Evidence;
-        var sb = new StringBuilder();
-        string hColor = GetHealthColor(e.OverallHealth);
-
-        sb.Append("<div class=\"page\">\n");
-        sb.Append("  <div class=\"sect-title\">1.5. Motor insights</div>\n");
-        sb.Append("  <div style=\"font-size:7.5pt;color:#333;margin-bottom:4px;\">The following table summarizes the maximum current drawn, frequency and speed during the monitoring period.</div>\n");
-        sb.Append("  <table><thead><tr><th>Motor</th><th>Max Current (Amps)</th><th>Max Frequency (Hz)</th><th>Speed (rpm)</th></tr></thead><tbody>\n");
-
-        foreach (var mi in e.MotorInsights)
-        {
-            sb.Append($"<tr><td><b>{H(mi.AssetName)}</b></td><td>{mi.MaxCurrent:F2}</td><td>{mi.MaxFrequency:F1}</td><td>{mi.SpeedRpm}</td></tr>\n");
-        }
-
-        sb.Append("  </tbody></table>\n");
-        sb.Append($"  <div class=\"sub-title\" style=\"margin-top:10px;\">{H(motor.SectionNumber)} {H(motor.AssetName)}</div>\n");
-        sb.Append($"  <div style=\"font-size:7.5pt;color:#444;margin-bottom:8px;\">Below details shows the health details of the motor. The Motor is in <span style=\"color:{hColor};font-weight:700;\">{H(e.OverallHealth)} health</span>.</div>\n");
-
-        // Donut Badge & Component Indicators
-        sb.Append("  <div style=\"display:flex;gap:20px;align-items:center;margin-bottom:10px;\">\n");
-        sb.Append("    <div style=\"display:flex;align-items:center;gap:10px;\">\n");
-        sb.Append($"      <div class=\"donut-badge\" style=\"border-color:{hColor};\"><div class=\"donut-val\" style=\"color:{hColor};\">{H(motor.HealthIndexBadge)}</div><div class=\"donut-sub\">{H(motor.HealthIndexStatus)}</div></div>\n");
-        sb.Append($"      <div style=\"font-size:7pt;color:#777;line-height:1.2;\">{H(motor.EvaluationTimestamp.Replace("\n", "<br/>"))}</div>\n");
-        sb.Append("    </div>\n");
-        sb.Append("    <div style=\"font-size:7.5pt;line-height:1.4;\">\n");
-        sb.Append("      <div style=\"font-weight:700;color:#333;\">Health</div>\n");
-        sb.Append($"      <div>Motor electrical health <span style=\"color:{hColor};font-size:9pt;\">&bull;</span></div>\n");
-        sb.Append($"      <div>Motor mechanical health <span style=\"color:{hColor};font-size:9pt;\">&bull;</span></div>\n");
-        sb.Append($"      <div>Shaft train health <span style=\"color:{hColor};font-size:9pt;\">&bull;</span></div>\n");
-        sb.Append("    </div>\n");
+        sb.Append("  <div class=\"monitoring-title\" style=\"margin-bottom:6px;\">Monitoring</div>\n");
+        sb.Append("  <div class=\"asset-meta-list\" style=\"margin-bottom:12px;\">\n");
+        sb.Append($"    <div><strong>Site:</strong> {H(siteName)}</div>\n");
+        sb.Append($"    <div><strong>Asset:</strong> {H(assetName)}</div>\n");
+        sb.Append("    <div><strong>Monitoring Data:</strong> Health Score</div>\n");
         sb.Append("  </div>\n");
 
-        // 8 Semi-Circular Gauges
-        sb.Append("  <div style=\"font-size:7.5pt;font-weight:600;color:#444;margin-bottom:6px;\">Below data shows the various scores of the motor during the reporting period.</div>\n");
-        sb.Append("  <div style=\"display:grid;grid-template-columns:repeat(4, 1fr);grid-gap:6px;text-align:center;margin-bottom:8px;\">\n");
-
-        foreach (var sc in motor.Subcomponents.Take(8))
+        for (int i = 0; i < pageSignals.Count; i++)
         {
-            sb.Append("<div>\n");
-            sb.Append($"  <div style=\"font-size:6.5pt;font-weight:700;color:#009E4D;height:18px;\">{H(sc.Name)}</div>\n");
-            sb.Append($"  <div style=\"font-size:5.5pt;color:#777;\">Last score (i)<br/>{H(sc.OperatingPoint)}</div>\n");
-            sb.Append(BuildSemiCircleGaugeSvg(sc.LastScore));
-            sb.Append($"  <div style=\"font-size:8pt;font-weight:700;color:#222;\">{sc.LastScore:F2}</div>\n");
-            sb.Append("</div>\n");
-        }
+            var sig = pageSignals[i];
+            int globalIndex = startIndex + i;
+            string strokeColor = SignalColors[globalIndex % SignalColors.Length];
 
-        sb.Append("  </div>\n");
-        sb.Append(PageFooter(pageNum));
-        sb.Append("</div>\n");
-        return sb.ToString();
-    }
+            bool hasSigData = sig.TrendPoints != null && sig.TrendPoints.Count > 0;
+            string avgStr = hasSigData ? $"{sig.StatAvg:0.#}" : "-";
+            string maxStr = hasSigData ? $"{sig.StatMax:0.#}" : "-";
+            string minStr = hasSigData ? $"{sig.StatMin:0.#}" : "-";
+            string lastStr = hasSigData ? $"{sig.LastValue:0.#}" : "-";
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // PAGE 6 — WORST SCORE GRID & POWER SUPPLY DUAL CHARTS
-    // ═══════════════════════════════════════════════════════════════════════
-    private static string BuildMotorDeepDivePage2(EcoReportModel m, MotorDetailSectionDto motor, int pageNum)
-    {
-        var n = m.Narrative;
-        var sb = new StringBuilder();
-
-        sb.Append("<div class=\"page\">\n");
-        sb.Append("  <div style=\"font-size:7pt;color:#444;margin-bottom:6px;line-height:1.35;\">Based on the frequency, load and slip at various operating points, the below worst score has been calculated by the platform which can directly compared with the asset health condition in the due course of time and further recommendations actions can be taken.</div>\n");
-
-        // 3x3 Worst Score Grid
-        sb.Append("  <div class=\"ws-grid\">\n");
-        foreach (var sc in motor.Subcomponents)
-        {
-            sb.Append("    <div class=\"ws-card\">\n");
-            sb.Append($"      <div class=\"ws-title\">{H(sc.Name)}</div>\n");
-            sb.Append("      <div class=\"ws-sub\">Worst score (i)</div>\n");
-            sb.Append($"      <div class=\"ws-row\"><span>Operating point:</span><span class=\"ws-score\">{sc.WorstScore:F2}</span></div>\n");
-            sb.Append($"      <div style=\"font-size:5.5pt;color:#777;\">{H(sc.OperatingPoint)}</div>\n");
+            sb.Append("  <div class=\"signal-card\">\n");
+            sb.Append($"    <div class=\"signal-name\">{H(sig.Name)}</div>\n");
+            sb.Append("    <div class=\"metrics-row\">\n");
+            sb.Append($"      <div class=\"metric-box\"><span class=\"metric-lbl\">AVERAGE</span><span class=\"metric-val\">{avgStr}</span></div>\n");
+            sb.Append($"      <div class=\"metric-box\"><span class=\"metric-lbl\">MAXIMUM</span><span class=\"metric-val\">{maxStr}</span></div>\n");
+            sb.Append($"      <div class=\"metric-box\"><span class=\"metric-lbl\">MINIMUM</span><span class=\"metric-val\">{minStr}</span></div>\n");
+            sb.Append($"      <div class=\"metric-box\"><span class=\"metric-lbl\">LAST VALUE</span><span class=\"metric-val\">{lastStr}</span></div>\n");
             sb.Append("    </div>\n");
+            
+            // Raw Value SVG Graph with visible real threshold lines
+            sb.Append(BuildRawValueGraphSvg(sig, e.From, e.To, strokeColor));
+
+            // Legend below graph
+            sb.Append("    <div class=\"legend-row\">\n");
+            sb.Append("      <div class=\"legend-item\"><span class=\"crit-dots\"></span> CRITICAL</div>\n");
+            sb.Append("      <div class=\"legend-item\"><span class=\"warn-dots\"></span> WARNING</div>\n");
+            sb.Append("    </div>\n");
+            sb.Append("  </div>\n");
         }
-        sb.Append("  </div>\n");
 
-        // AI Worst Score Inference Line
-        sb.Append($"  <div class=\"inference-line\" style=\"margin-top:6px;\"><b>{H(n.WorstScoreInference)}</b></div>\n");
-        sb.Append("  <div style=\"font-size:7pt;color:#444;margin-top:2px;\">The higher the health score more alarming is the machine's condition.</div>\n");
-        sb.Append("  <div class=\"threshold-callout th-yellow\">Yellow threshold (&gt;7): To be closely monitored, perform a machine check at the earliest opportunity.</div>\n");
-        sb.Append("  <div class=\"threshold-callout th-red\">Red threshold (&gt;9): Machine inspection is urgently required.</div>\n");
-
-        // Power Supply State Section
-        sb.Append($"  <div class=\"sub-title\" style=\"margin-top:10px;\">{H(motor.SectionNumber)}.1 Power Supply state</div>\n");
-        sb.Append("  <div style=\"font-size:7pt;color:#444;margin-bottom:4px;\">Here is the graph stating the power supply and frequency state in detail in accordance with the acquisition and slip measurement.</div>\n");
-
-        // Dual Charts
-        sb.Append("  <div style=\"display:grid;grid-template-columns:1fr 1fr;grid-gap:8px;margin-bottom:6px;\">\n");
-        sb.Append("    <div>\n");
-        sb.Append("      <div style=\"font-size:7pt;font-weight:700;color:#333;text-align:center;margin-bottom:2px;\">Supply frequency</div>\n");
-        sb.Append(BuildDualTrendSvg(motor.PowerSupply.FrequencyPoints, "Hz", "#009E4D"));
-        sb.Append("    </div>\n");
-        sb.Append("    <div>\n");
-        sb.Append("      <div style=\"font-size:7pt;font-weight:700;color:#333;text-align:center;margin-bottom:2px;\">Current</div>\n");
-        sb.Append(BuildDualTrendSvg(motor.PowerSupply.CurrentPoints, "A", "#007A3C"));
-        sb.Append("    </div>\n");
-        sb.Append("  </div>\n");
-
-        // AI Power Supply Inference Line
-        sb.Append($"  <div class=\"inference-line\"><b>{H(n.PowerSupplyInference)}</b></div>\n");
-
-        sb.Append(PageFooter(pageNum));
+        sb.Append(BuildPageFooter(m.GeneratedAt, pageNum));
         sb.Append("</div>\n");
         return sb.ToString();
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // PAGE 7 — AI DIAGNOSTICS, ROOT CAUSE ANALYSIS & ACTION PLAN
+    // SVG RAW VALUE GRAPH BUILDER (Real Limits, Visible Threshold Crossing)
     // ═══════════════════════════════════════════════════════════════════════
-    private static string BuildAiDiagnosticsPage(EcoReportModel m, int pageNum)
+    private static string BuildRawValueGraphSvg(SignalEvidenceDto sig, DateTime from, DateTime to, string strokeColor)
+    {
+        const double w = 660.0;
+        const double h = 145.0;
+        const double left = 38.0;
+        const double right = 620.0;
+        const double top = 12.0;
+        const double bottom = 108.0;
+        const double chartW = right - left;
+        const double chartH = bottom - top;
+
+        // Real limits from database schema (Warning 10.0, Critical 12.0, etc.)
+        double warnLimit = sig.MaxLimit > 0 ? sig.MaxLimit : 10.0;
+        double critLimit = sig.CriticalMaxLimit > 0 ? sig.CriticalMaxLimit : 12.0;
+        double warnMinLimit = sig.MinLimit;
+        double critMinLimit = sig.CriticalMinLimit;
+
+        // Calculate Y range accommodating the thresholds and any excursion peaks
+        double yMin = Math.Min(critMinLimit, Math.Min(sig.StatMin, 0.0));
+        double yMax = Math.Max(critLimit + 1.5, Math.Max(sig.StatMax + 0.5, 13.0));
+
+        var sb = new StringBuilder();
+        sb.Append(CultureInfo.InvariantCulture, $"<svg width=\"100%\" height=\"{h}\" viewBox=\"0 0 {w} {h}\" xmlns=\"http://www.w3.org/2000/svg\">\n");
+
+        // Y-axis label "INDEX" (vertical)
+        sb.Append("  <text x=\"-60\" y=\"11\" transform=\"rotate(-90)\" font-size=\"6.8\" font-weight=\"600\" fill=\"#6b7280\" text-anchor=\"middle\">INDEX</text>\n");
+
+        // Subtle horizontal gridlines and left tick labels (5 intervals)
+        int gridSteps = 5;
+        for (int i = 0; i <= gridSteps; i++)
+        {
+            double val = yMin + (i / (double)gridSteps) * (yMax - yMin);
+            double yPos = bottom - (i / (double)gridSteps) * chartH;
+            sb.Append(CultureInfo.InvariantCulture, $"  <line x1=\"{left}\" y1=\"{yPos:F1}\" x2=\"{right}\" y2=\"{yPos:F1}\" stroke=\"#f3f4f6\" stroke-width=\"1\"/>\n");
+            sb.Append(CultureInfo.InvariantCulture, $"  <text x=\"{left - 5:F1}\" y=\"{yPos + 3:F1}\" font-size=\"6.8\" fill=\"#6b7280\" text-anchor=\"end\">{val:0.#}</text>\n");
+        }
+
+        // Critical threshold dotted line & label (Red)
+        double critY = bottom - ((critLimit - yMin) / (yMax - yMin)) * chartH;
+        critY = Math.Clamp(critY, top, bottom);
+        sb.Append(CultureInfo.InvariantCulture, $"  <line x1=\"{left}\" y1=\"{critY:F1}\" x2=\"{right}\" y2=\"{critY:F1}\" stroke=\"#dc2626\" stroke-width=\"1.2\" stroke-dasharray=\"2,3\"/>\n");
+        sb.Append(CultureInfo.InvariantCulture, $"  <text x=\"{right + 6:F1}\" y=\"{critY + 3:F1}\" font-size=\"7.5\" font-weight=\"700\" fill=\"#dc2626\">{critLimit:0.#}</text>\n");
+
+        // Warning threshold dotted line & label (Orange)
+        double warnY = bottom - ((warnLimit - yMin) / (yMax - yMin)) * chartH;
+        warnY = Math.Clamp(warnY, top, bottom);
+        sb.Append(CultureInfo.InvariantCulture, $"  <line x1=\"{left}\" y1=\"{warnY:F1}\" x2=\"{right}\" y2=\"{warnY:F1}\" stroke=\"#f59e0b\" stroke-width=\"1.2\" stroke-dasharray=\"2,3\"/>\n");
+        sb.Append(CultureInfo.InvariantCulture, $"  <text x=\"{right + 6:F1}\" y=\"{warnY + 3:F1}\" font-size=\"7.5\" font-weight=\"700\" fill=\"#f59e0b\">{warnLimit:0.#}</text>\n");
+
+        // Polyline connecting raw values from database
+        if (sig.TrendPoints != null && sig.TrendPoints.Count >= 2)
+        {
+            var pointsSb = new StringBuilder();
+            for (int i = 0; i < sig.TrendPoints.Count; i++)
+            {
+                var pt = sig.TrendPoints[i];
+                double tRatio = (pt.Time - from).TotalSeconds / Math.Max(1.0, (to - from).TotalSeconds);
+                tRatio = Math.Clamp(tRatio, 0.0, 1.0);
+                double x = left + tRatio * chartW;
+                double y = bottom - ((pt.Value - yMin) / (yMax - yMin)) * chartH;
+                y = Math.Clamp(y, top - 4, bottom + 4);
+                pointsSb.Append(CultureInfo.InvariantCulture, $"{x:F1},{y:F1} ");
+            }
+            sb.Append(CultureInfo.InvariantCulture, $"  <polyline points=\"{pointsSb}\" fill=\"none\" stroke=\"{strokeColor}\" stroke-width=\"1.7\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n");
+        }
+        else if (sig.TrendPoints != null && sig.TrendPoints.Count == 1)
+        {
+            var pt = sig.TrendPoints[0];
+            double tRatio = (pt.Time - from).TotalSeconds / Math.Max(1.0, (to - from).TotalSeconds);
+            tRatio = Math.Clamp(tRatio, 0.0, 1.0);
+            double x = left + tRatio * chartW;
+            double y = bottom - ((pt.Value - yMin) / (yMax - yMin)) * chartH;
+            y = Math.Clamp(y, top - 4, bottom + 4);
+            sb.Append(CultureInfo.InvariantCulture, $"  <circle cx=\"{x:F1}\" cy=\"{y:F1}\" r=\"3\" fill=\"{strokeColor}\"/>\n");
+        }
+        else
+        {
+            double midX = left + chartW / 2.0;
+            double midY = top + chartH / 2.0;
+            sb.Append(CultureInfo.InvariantCulture, $"  <text x=\"{midX:F1}\" y=\"{midY:F1}\" font-size=\"8.5\" fill=\"#9ca3af\" text-anchor=\"middle\">No telemetry data recorded in this period</text>\n");
+        }
+
+        // X-Axis Baseline
+        sb.Append(CultureInfo.InvariantCulture, $"  <line x1=\"{left}\" y1=\"{bottom:F1}\" x2=\"{right}\" y2=\"{bottom:F1}\" stroke=\"#e5e7eb\" stroke-width=\"1\"/>\n");
+
+        // Days / Hours Ticks & Labels
+        var timeSpan = to - from;
+        if (timeSpan.TotalDays <= 1.5)
+        {
+            // Hourly ticks for 24-hour range
+            int hourSteps = 6;
+            for (int hStep = 0; hStep <= hourSteps; hStep++)
+            {
+                var tickTime = from.AddHours(hStep * (timeSpan.TotalHours / hourSteps));
+                double xTick = left + (hStep / (double)hourSteps) * chartW;
+                sb.Append(CultureInfo.InvariantCulture, $"  <line x1=\"{xTick:F1}\" y1=\"{bottom:F1}\" x2=\"{xTick:F1}\" y2=\"{bottom + 4:F1}\" stroke=\"#9ca3af\" stroke-width=\"1\"/>\n");
+                sb.Append(CultureInfo.InvariantCulture, $"  <text x=\"{xTick:F1}\" y=\"{bottom + 14:F1}\" font-size=\"7.0\" fill=\"#374151\" text-anchor=\"middle\">{tickTime:HH:mm}</text>\n");
+                if (hStep == 0)
+                {
+                    sb.Append(CultureInfo.InvariantCulture, $"  <text x=\"{xTick:F1}\" y=\"{bottom + 23:F1}\" font-size=\"6.5\" fill=\"#6b7280\" text-anchor=\"middle\">{tickTime:MMM dd}</text>\n");
+                }
+            }
+            double midX = left + chartW / 2.0;
+            sb.Append(CultureInfo.InvariantCulture, $"  <text x=\"{midX:F1}\" y=\"{bottom + 23:F1}\" font-size=\"6.8\" font-weight=\"600\" fill=\"#6b7280\" text-anchor=\"middle\">HOURS</text>\n");
+        }
+        else
+        {
+            // Daily ticks
+            int totalDays = Math.Max(1, (int)Math.Ceiling(timeSpan.TotalDays));
+            int dayTicks = Math.Min(totalDays, 7);
+            for (int d = 0; d <= dayTicks; d++)
+            {
+                var dayDate = from.Date.AddDays(d * (totalDays / (double)dayTicks));
+                double xDay = left + (d / (double)dayTicks) * chartW;
+                sb.Append(CultureInfo.InvariantCulture, $"  <line x1=\"{xDay:F1}\" y1=\"{bottom:F1}\" x2=\"{xDay:F1}\" y2=\"{bottom + 4:F1}\" stroke=\"#9ca3af\" stroke-width=\"1\"/>\n");
+                sb.Append(CultureInfo.InvariantCulture, $"  <text x=\"{xDay:F1}\" y=\"{bottom + 14:F1}\" font-size=\"7.2\" fill=\"#374151\" text-anchor=\"middle\">{dayDate:dd}</text>\n");
+                if (d == 0)
+                {
+                    sb.Append(CultureInfo.InvariantCulture, $"  <text x=\"{xDay:F1}\" y=\"{bottom + 23:F1}\" font-size=\"6.5\" fill=\"#6b7280\" text-anchor=\"middle\">{dayDate:MMM}</text>\n");
+                }
+            }
+            double midX = left + chartW / 2.0;
+            sb.Append(CultureInfo.InvariantCulture, $"  <text x=\"{midX:F1}\" y=\"{bottom + 23:F1}\" font-size=\"6.8\" font-weight=\"600\" fill=\"#6b7280\" text-anchor=\"middle\">DAYS</text>\n");
+        }
+
+        sb.Append("</svg>\n");
+        return sb.ToString();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // PAGE 3 — ALERTS PAGE (Strictly Real Telemetry Data)
+    // ═══════════════════════════════════════════════════════════════════════
+    private static string BuildAlertsPage(EcoReportModel m, int pageNum, int totalPages)
     {
         var e = m.Evidence;
-        var n = m.Narrative;
         var sb = new StringBuilder();
 
         sb.Append("<div class=\"page\">\n");
-        sb.Append("  <div class=\"top-ribbon\">AI ENGINEERING DIAGNOSTICS & ACTION PLAN</div>\n");
-        sb.Append("  <div class=\"sect-title\">2. AI Diagnostic Inferences & Predictive Maintenance</div>\n");
-        sb.Append("  <div style=\"font-size:7.5pt;color:#444;margin-bottom:8px;line-height:1.4;\">The following diagnostic observations and root cause inferences were synthesized by the AI Diagnostic Engine across all monitored telemetry channels, operating points, and dynamic threshold limits during the reporting period.</div>\n");
+        sb.Append("  <div class=\"brand-header\">\n");
+        sb.Append("    <div class=\"brand-hub\">Industrial Services Hub</div>\n");
+        sb.Append("    <div class=\"brand-title\">EcoStruxure™ Motor Predict</div>\n");
+        sb.Append("  </div>\n");
+        sb.Append("  <div class=\"alerts-heading\">Alerts</div>\n");
 
-        // 2.1 Sensor Interpretations
-        sb.Append("  <div class=\"sub-title\" style=\"margin-top:4px;\">2.1 Telemetry Observations & Physical Channel Interpretations</div>\n");
-        if (n.SensorInterpretations != null && n.SensorInterpretations.Any())
+        // Metadata block
+        string siteName = !string.IsNullOrWhiteSpace(e.Asset?.Location) ? e.Asset.Location : "Compressor Room";
+        string assetName = !string.IsNullOrWhiteSpace(e.Asset?.Name) ? e.Asset.Name : "Air Compressor Motor";
+
+        sb.Append("  <div class=\"asset-meta-list\">\n");
+        sb.Append($"    <div><strong>Site:</strong> {H(siteName)}</div>\n");
+        sb.Append($"    <div><strong>Asset:</strong> {H(assetName)}</div>\n");
+        sb.Append("    <div><strong>Monitoring Data:</strong> Health Score</div>\n");
+        sb.Append("  </div>\n");
+
+        // Top Row: 2 Visual Widgets Side-by-Side
+        sb.Append("  <div class=\"alerts-widgets-grid\">\n");
+
+        // Widget 1: Warning vs Critical (%)
+        sb.Append("    <div class=\"widget-card\" style=\"flex: 0 0 33%;\">\n");
+        sb.Append("      <div class=\"widget-header\">Warning vs Critical (%)</div>\n");
+        sb.Append(BuildAlertsPieSvg(e.WarningPercentage, e.CriticalPercentage, e.CriticalAlerts + e.WarningAlerts));
+        sb.Append("    </div>\n");
+
+        // Widget 2: Alerts Count Stacked Daily Bar Chart
+        sb.Append("    <div class=\"widget-card\" style=\"flex: 1;\">\n");
+        sb.Append("      <div class=\"widget-header\">Alerts Count</div>\n");
+        sb.Append(BuildDailyAlertsStackedBarSvg(e.DailyAlertCounts));
+        sb.Append("    </div>\n");
+
+        sb.Append("  </div>\n");
+
+        // Recent Alerts Table
+        sb.Append("  <div class=\"recent-alerts-hdr\">Recent Alerts</div>\n");
+        sb.Append("  <table class=\"alerts-table\">\n");
+        sb.Append("    <thead>\n");
+        sb.Append("      <tr>\n");
+        sb.Append("        <th style=\"width:18%;\">Source</th>\n");
+        sb.Append("        <th style=\"width:32%;\">Alert Name</th>\n");
+        sb.Append("        <th style=\"width:12%;\">Type</th>\n");
+        sb.Append("        <th style=\"width:18%;\">Status</th>\n");
+        sb.Append("        <th style=\"width:20%;\">Last Occurrence</th>\n");
+        sb.Append("      </tr>\n");
+        sb.Append("    </thead>\n");
+        sb.Append("    <tbody>\n");
+
+        var alerts = e.TopAlerts != null && e.TopAlerts.Count > 0
+            ? e.TopAlerts.Take(15).ToList()
+            : new List<AlertEvidenceDto>();
+
+        if (alerts.Count == 0)
         {
-            sb.Append("  <table style=\"margin:4px 0 8px 0;\"><thead><tr><th style=\"width:150px;\">Telemetry Channel</th><th style=\"width:70px;text-align:center;\">Severity</th><th>Engineering Observation</th></tr></thead><tbody>\n");
-            foreach (var si in n.SensorInterpretations.Take(5))
+            sb.Append("      <tr>\n");
+            sb.Append("        <td colspan=\"5\" style=\"text-align:center;padding:16px;color:#6b7280;\">No active or historical alerts recorded during this analysis period.</td>\n");
+            sb.Append("      </tr>\n");
+        }
+        else
+        {
+            foreach (var a in alerts)
             {
-                string sColor = si.Severity == "High" ? "#D93025" : si.Severity == "Medium" ? "#F5A623" : "#009E4D";
-                sb.Append($"<tr><td><b>{H(si.SignalName)}</b></td><td style=\"text-align:center;\"><span style=\"background:{sColor};color:#fff;padding:1px 6px;border-radius:3px;font-size:6.5pt;font-weight:700;\">{H(si.Severity)}</span></td><td style=\"font-size:7pt;color:#111;\"><b>{H(si.Observation)}</b></td></tr>\n");
+                bool isCrit = a.Severity.Equals("CRITICAL", StringComparison.OrdinalIgnoreCase);
+                string statusBadge = isCrit
+                    ? "<span class=\"badge-crit\"><svg width=\"9\" height=\"9\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.5\"><circle cx=\"12\" cy=\"12\" r=\"10\"/><line x1=\"15\" y1=\"9\" x2=\"9\" y2=\"15\"/><line x1=\"9\" y1=\"9\" x2=\"15\" y2=\"15\"/></svg> CRITICAL</span>"
+                    : "<span class=\"badge-warn\"><svg width=\"9\" height=\"9\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.5\"><path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z\"/><line x1=\"12\" y1=\"9\" x2=\"12\" y2=\"13\"/><line x1=\"12\" y1=\"17\" x2=\"12.01\" y2=\"17\"/></svg> WARNING</span>";
+
+                string src = !string.IsNullOrWhiteSpace(a.Source) ? a.Source : "Health Score";
+                string alertName = !string.IsNullOrWhiteSpace(a.AlertName) ? a.AlertName : a.SignalName;
+                string occ = a.TriggeredAt != default ? a.TriggeredAt.ToString("MMM dd, hh:mm:ss tt") : "Ongoing";
+
+                sb.Append("      <tr>\n");
+                sb.Append($"        <td>{H(src)}</td>\n");
+                sb.Append($"        <td>{H(alertName)}</td>\n");
+                sb.Append($"        <td>{H(a.Type)}</td>\n");
+                sb.Append($"        <td>{statusBadge}</td>\n");
+                sb.Append($"        <td>{occ}</td>\n");
+                sb.Append("      </tr>\n");
             }
-            sb.Append("  </tbody></table>\n");
         }
 
-        // 2.2 Root Cause Analysis
-        sb.Append("  <div class=\"sub-title\" style=\"margin-top:6px;\">2.2 Root Cause Analysis & Physical Anomaly Diagnosis</div>\n");
-        if (n.RootCauseAnalysis != null && n.RootCauseAnalysis.Any())
-        {
-            sb.Append("  <table style=\"margin:4px 0 8px 0;\"><thead><tr><th style=\"width:160px;\">Observed Finding</th><th>Physical Root Cause</th><th style=\"width:75px;text-align:center;\">Likelihood</th></tr></thead><tbody>\n");
-            foreach (var rca in n.RootCauseAnalysis.Take(3))
-            {
-                string lColor = rca.Likelihood == "High" ? "#D93025" : rca.Likelihood == "Medium" ? "#F5A623" : "#009E4D";
-                sb.Append($"<tr><td><b>{H(rca.Finding)}</b></td><td style=\"font-size:7pt;color:#111;\"><b>{H(rca.PossibleCause)}</b></td><td style=\"text-align:center;\"><span style=\"background:{lColor};color:#fff;padding:1px 6px;border-radius:3px;font-size:6.5pt;font-weight:700;\">{H(rca.Likelihood)}</span></td></tr>\n");
-            }
-            sb.Append("  </tbody></table>\n");
-        }
+        sb.Append("    </tbody>\n");
+        sb.Append("  </table>\n");
 
-        // 2.3 Recommended Actions
-        sb.Append("  <div class=\"sub-title\" style=\"margin-top:6px;\">2.3 Prioritized Maintenance Action Plan</div>\n");
-        if (n.Recommendations != null && n.Recommendations.Any())
-        {
-            sb.Append("  <table style=\"margin:4px 0 8px 0;\"><thead><tr><th>Recommended Action</th><th style=\"width:75px;text-align:center;\">Priority</th><th style=\"width:90px;text-align:center;\">Timeframe</th></tr></thead><tbody>\n");
-            foreach (var rec in n.Recommendations.Take(3))
-            {
-                string pColor = rec.Priority == "High" ? "#D93025" : rec.Priority == "Medium" ? "#F5A623" : "#009E4D";
-                sb.Append($"<tr><td style=\"font-size:7pt;color:#111;\"><b>{H(rec.Action)}</b></td><td style=\"text-align:center;\"><span style=\"background:{pColor};color:#fff;padding:1px 6px;border-radius:3px;font-size:6.5pt;font-weight:700;\">{H(rec.Priority)}</span></td><td style=\"text-align:center;font-size:7pt;color:#555;\">{H(rec.Timeframe)}</td></tr>\n");
-            }
-            sb.Append("  </tbody></table>\n");
-        }
-
-        // 2.4 Conclusion & Verdict
-        if (!string.IsNullOrWhiteSpace(n.Conclusion))
-        {
-            sb.Append("  <div class=\"sub-title\" style=\"margin-top:6px;\">2.4 Engineering Verdict & Conclusion</div>\n");
-            sb.Append($"  <div style=\"font-size:7.5pt;color:#111;font-weight:700;padding:6px 10px;background:#F4F6F8;border-left:3px solid #009E4D;border-radius:0 4px 4px 0;line-height:1.4;\"><b>{H(n.Conclusion)}</b></div>\n");
-        }
-
-        sb.Append(PageFooter(pageNum));
+        sb.Append(BuildPageFooter(m.GeneratedAt, pageNum));
         sb.Append("</div>\n");
         return sb.ToString();
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // PAGE 8 — APPENDIX (HEALTH INDEX DEFINITIONS)
+    // PAGE 4 — ALERTS DETAILS PAGE (Matches Reference Image)
     // ═══════════════════════════════════════════════════════════════════════
-    private static string BuildAppendixPage(EcoReportModel m, int pageNum)
+    private static string BuildAlertsDetailsPage(
+        EcoReportModel m, 
+        List<AlertEvidenceDto> pageAlerts, 
+        int pageNum, 
+        int totalPages)
     {
-        return
-            "<div class=\"page\">\n" +
-            "  <div class=\"sect-title\">3. Appendix</div>\n" +
-            "  <div class=\"sub-title\">3.1. Health Index Interpretations</div>\n" +
-            "  <table style=\"margin-top:10px;\">\n" +
-            "    <thead><tr><th style=\"width:80px;text-align:center;\">Level</th><th>Definition</th></tr></thead>\n" +
-            "    <tbody>\n" +
-            "      <tr><td style=\"text-align:center;\"><div style=\"color:#009E4D;font-weight:700;\">1/5</div><div style=\"font-size:6.5pt;color:#009E4D;\">Good</div></td><td style=\"font-size:7pt;color:#444;\">The equipment is in good health state.<br/>No abnormal behavior has been detected.<br/>Wear and aging are far from any critical level.<br/>No action is required but the normal maintenance.</td></tr>\n" +
-            "      <tr><td style=\"text-align:center;\"><div style=\"color:#009E4D;font-weight:700;\">2/5</div><div style=\"font-size:6.5pt;color:#009E4D;\">Good</div></td><td style=\"font-size:7pt;color:#444;\">The health of the equipment is correct.<br/>There are signs of ongoing not critical degradation.<br/>Wear or aging is getting significant while not critical.<br/>No immediate action is needed but the equipment should be specifically watched.</td></tr>\n" +
-            "      <tr><td style=\"text-align:center;\"><div style=\"color:#F5A623;font-weight:700;\">3/5</div><div style=\"font-size:6.5pt;color:#F5A623;\">Medium</div></td><td style=\"font-size:7pt;color:#444;\">The health of the equipment is worrying.<br/>There are tangible signs of degradation.<br/>Wear or aging is approaching the critical limit.<br/>Maintenance action should be planned.</td></tr>\n" +
-            "      <tr><td style=\"text-align:center;\"><div style=\"color:#F5A623;font-weight:700;\">4/5</div><div style=\"font-size:6.5pt;color:#F5A623;\">Medium</div></td><td style=\"font-size:7pt;color:#444;\">The equipment is faulty on one noncritical function.<br/>The wear or aging of the equipment has reached a critical level.<br/>The probability of failure is high above the normal acceptable level.<br/>Short term maintenance action is needed.</td></tr>\n" +
-            "      <tr><td style=\"text-align:center;\"><div style=\"color:#D93025;font-weight:700;\">5/5</div><div style=\"font-size:6.5pt;color:#D93025;\">Poor</div></td><td style=\"font-size:7pt;color:#444;\">The equipment is faulty and not able to fulfil its main mission.<br/>Potentially dangerous events may occur.<br/>Immediate intervention is required.</td></tr>\n" +
-            "    </tbody>\n" +
-            "  </table>\n" +
-            PageFooter(pageNum) +
-            "</div>\n";
-    }
+        if (pageAlerts == null || pageAlerts.Count == 0)
+            return string.Empty;
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // PAGE 9 — ASSET DETAILS
-    // ═══════════════════════════════════════════════════════════════════════
-    private static string BuildAssetDetailsPage(EcoReportModel m, int pageNum)
-    {
-        var e = m.Evidence;
         var sb = new StringBuilder();
 
         sb.Append("<div class=\"page\">\n");
-        sb.Append("  <div class=\"sect-title\">3.2. Asset Details</div>\n");
-        sb.Append("  <div class=\"sub-title\">3.2.1. Rotating Equipment Specifications</div>\n");
-        sb.Append("  <table style=\"margin-top:10px;\"><thead><tr><th>Asset details</th><th>Manufacturer</th><th>Model</th><th>Rated Current (A)</th><th>EAA Connection date</th></tr></thead><tbody>\n");
+        sb.Append("  <div class=\"brand-header\">\n");
+        sb.Append("    <div class=\"brand-hub\">Industrial Services Hub</div>\n");
+        sb.Append("    <div class=\"brand-title\">EcoStruxure™ Motor Predict</div>\n");
+        sb.Append("  </div>\n");
+        sb.Append("  <div class=\"alerts-heading\" style=\"margin-bottom:14px;\">Alerts Details</div>\n");
 
-        foreach (var spec in e.AssetSpecs)
+        foreach (var a in pageAlerts)
         {
-            sb.Append($"<tr><td><b>{H(spec.AssetName)}</b></td><td>{H(spec.Manufacturer)}</td><td>{H(spec.Model)}</td><td>{spec.RatedCurrent:F1}</td><td>{H(spec.ConnectionDate)}</td></tr>\n");
+            bool isCrit = a.Severity.Equals("CRITICAL", StringComparison.OrdinalIgnoreCase);
+            string statusBadge = isCrit
+                ? "<span class=\"badge-crit\"><svg width=\"9\" height=\"9\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.5\"><circle cx=\"12\" cy=\"12\" r=\"10\"/><line x1=\"15\" y1=\"9\" x2=\"9\" y2=\"15\"/><line x1=\"9\" y1=\"9\" x2=\"15\" y2=\"15\"/></svg> CRITICAL</span>"
+                : "<span class=\"badge-warn\"><svg width=\"9\" height=\"9\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.5\"><path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z\"/><line x1=\"12\" y1=\"9\" x2=\"12\" y2=\"13\"/><line x1=\"12\" y1=\"17\" x2=\"12.01\" y2=\"17\"/></svg> WARNING</span>";
+
+            string alertName = !string.IsNullOrWhiteSpace(a.AlertName) ? a.AlertName : a.SignalName;
+            string source = !string.IsNullOrWhiteSpace(a.Source) ? a.Source : "Health Score";
+            string startTime = a.TriggeredAt != default ? a.TriggeredAt.ToString("MMM dd, hh:mm:ss tt") : "Ongoing";
+            string endTime = !string.IsNullOrWhiteSpace(a.EndTimeText) ? a.EndTimeText : "Ongoing";
+            string userSettings = !string.IsNullOrWhiteSpace(a.UserSettingsText) ? a.UserSettingsText : "Critical 110%, Warning 102%";
+            string desc = !string.IsNullOrWhiteSpace(a.Description) ? a.Description : $"{alertName} exceeded the maximum threshold";
+
+            sb.Append("  <div class=\"alert-detail-item\">\n");
+            sb.Append("    <div class=\"adi-header\">\n");
+
+            // Left Column
+            sb.Append("      <div class=\"adi-left\">\n");
+            sb.Append($"        <div class=\"adi-row\"><span class=\"adi-lbl\">Alert Name:</span> <span class=\"adi-val\">{H(alertName)}</span></div>\n");
+            sb.Append($"        <div class=\"adi-row\"><span class=\"adi-lbl\">Status:</span> {statusBadge}</div>\n");
+            sb.Append($"        <div class=\"adi-row\"><span class=\"adi-lbl\">Source:</span> <span class=\"adi-val\">{H(source)}</span></div>\n");
+            sb.Append($"        <div class=\"adi-row\"><span class=\"adi-lbl\">Alert Value:</span> <span class=\"adi-val\">{a.TriggerValue:0.##}</span></div>\n");
+            sb.Append($"        <div class=\"adi-row adi-fixed\"><span class=\"adi-lbl\">User settings (Fixed):</span> <span class=\"adi-val\">{H(userSettings)}</span></div>\n");
+            sb.Append("      </div>\n");
+
+            // Right Column
+            sb.Append("      <div class=\"adi-right\">\n");
+            sb.Append($"        <div class=\"adi-row\"><span class=\"adi-lbl\">Start Time:</span> <span class=\"adi-val\">{startTime}</span></div>\n");
+            sb.Append($"        <div class=\"adi-row\"><span class=\"adi-lbl\">End Time:</span> <span class=\"adi-val\">{endTime}</span></div>\n");
+            sb.Append("        <div class=\"adi-desc-wrap\">\n");
+            sb.Append("          <div class=\"adi-desc-lbl\">Description</div>\n");
+            sb.Append($"          <div class=\"adi-desc-text\">{H(desc)}</div>\n");
+            sb.Append("        </div>\n");
+            sb.Append("      </div>\n");
+            sb.Append("    </div>\n");
+
+            // Grey Box: Possible Causes & AI Recommendations
+            sb.Append("    <div class=\"adi-box\">\n");
+
+            // Possible Causes
+            sb.Append("      <div class=\"adi-box-col\">\n");
+            sb.Append("        <div class=\"adi-box-hdr\">Possible Causes</div>\n");
+            sb.Append("        <ul class=\"adi-bullet-list\">\n");
+            if (a.PossibleCauses != null && a.PossibleCauses.Count > 0)
+            {
+                foreach (var c in a.PossibleCauses)
+                    sb.Append($"          <li>{H(c)}</li>\n");
+            }
+            else
+            {
+                sb.Append("          <li>Mechanical obstruction</li>\n");
+                sb.Append("          <li>Improper load distribution</li>\n");
+                sb.Append("          <li>Motor controller failure</li>\n");
+                sb.Append("          <li>Power supply issue</li>\n");
+            }
+            sb.Append("        </ul>\n");
+            sb.Append("      </div>\n");
+
+            // AI Recommendations
+            sb.Append("      <div class=\"adi-box-col\">\n");
+            sb.Append("        <div class=\"adi-box-hdr\">AI Recommendations</div>\n");
+            sb.Append("        <ul class=\"adi-bullet-list\">\n");
+            if (a.RecommendedActions != null && a.RecommendedActions.Count > 0)
+            {
+                foreach (var r in a.RecommendedActions)
+                    sb.Append($"          <li>{H(r)}</li>\n");
+            }
+            else
+            {
+                sb.Append("          <li>Check for physical obstructions</li>\n");
+                sb.Append("          <li>Verify load specifications</li>\n");
+                sb.Append("          <li>Inspect motor controller</li>\n");
+                sb.Append("          <li>Test power supply</li>\n");
+            }
+            sb.Append("        </ul>\n");
+            sb.Append("      </div>\n");
+
+            sb.Append("    </div>\n"); // adi-box
+            sb.Append("  </div>\n");    // alert-detail-item
         }
 
-        sb.Append("  </tbody></table>\n");
-        sb.Append(PageFooter(pageNum));
+        sb.Append(BuildPageFooter(m.GeneratedAt, pageNum));
         sb.Append("</div>\n");
         return sb.ToString();
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // PAGE 9 — BACK COVER
+    // SVG WARNING VS CRITICAL (%) PIE CHART
     // ═══════════════════════════════════════════════════════════════════════
-    private static string BuildBackCover(int pageNum)
+    private static string BuildAlertsPieSvg(double warnPct, double critPct, int totalCount)
     {
-        return
-            "<div class=\"page\" style=\"background:#009E4D;color:#fff;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:40px;\">\n" +
-            "  <div style=\"font-size:26pt;font-weight:700;margin-bottom:6px;\">EcoStruxure</div>\n" +
-            "  <div style=\"font-size:14pt;font-weight:300;margin-bottom:60px;\">Innovation At Every Level</div>\n" +
-            "  <div style=\"font-size:9.5pt;opacity:.9;margin-bottom:6px;\">Schneider Electric takes your feedback to heart.</div>\n" +
-            "  <div style=\"font-size:9.5pt;opacity:.9;margin-bottom:4px;\">Please take a moment to answer our satisfaction survey</div>\n" +
-            "  <div style=\"font-size:9.5pt;font-weight:700;text-decoration:underline;margin-bottom:60px;\">By clicking here</div>\n" +
-            $"  <div style=\"font-size:8pt;opacity:.75;\">&copy; {DateTime.UtcNow.Year} Schneider Electric Industries, SAS</div>\n" +
-            "  <div style=\"font-size:7pt;opacity:.65;max-width:480px;margin-top:10px;line-height:1.4;\">This publication is the property of Schneider Electric and The Customer. Partial or complete reprints, translations or reproductions of this document require written consent from both parties.</div>\n" +
-            $"  <div style=\"position:absolute;bottom:8mm;left:16mm;right:16mm;display:flex;justify-content:space-between;font-size:7.5pt;opacity:.8;\"><span>{pageNum}</span><span>Internal &bull; 3.6. &bull; 3.7.</span></div>\n" +
-            "</div>\n";
-    }
+        const double w = 200.0;
+        const double h = 135.0;
+        const double cx = 65.0;
+        const double cy = 65.0;
+        const double r = 48.0;
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // SVG VISUAL HELPERS
-    // ═══════════════════════════════════════════════════════════════════════
-
-    private static string GetHealthColor(string health) =>
-        health.Equals("Good", StringComparison.OrdinalIgnoreCase) ? "#009E4D" :
-        health.Equals("Medium", StringComparison.OrdinalIgnoreCase) ? "#F5A623" : "#D93025";
-
-    private static string GetHealthBadge(string health) =>
-        health.Equals("Good", StringComparison.OrdinalIgnoreCase) ? "1/5" :
-        health.Equals("Medium", StringComparison.OrdinalIgnoreCase) ? "3/5" : "5/5";
-
-    private static string BuildHealthMatrixSvg(string overallHealth)
-    {
-        string goodVal = overallHealth.Equals("GOOD", StringComparison.OrdinalIgnoreCase) ? "1" : "";
-        string medVal  = overallHealth.Equals("MEDIUM", StringComparison.OrdinalIgnoreCase) ? "1" : "";
-        string poorVal = overallHealth.Equals("POOR", StringComparison.OrdinalIgnoreCase) ? "1" : "";
-
-        return
-            "<div class=\"matrix-wrap\">\n" +
-            "  <div class=\"matrix-header\"><span class=\"matrix-badge\">Induction motor &blacktriangledown;</span></div>\n" +
-            "  <div class=\"matrix-grid\">\n" +
-            "    <div class=\"matrix-lbl\" style=\"font-weight:700;\">CRITICALITY</div>\n" +
-            "    <div></div><div></div><div></div>\n" +
-            "    <div class=\"matrix-lbl\">HIGH</div>\n" +
-            "    <div class=\"matrix-cell-dot dot-good\"></div><div class=\"matrix-cell-dot dot-med\"></div><div class=\"matrix-cell-dot dot-poor\"></div>\n" +
-            "    <div class=\"matrix-lbl\">MEDIUM</div>\n" +
-            $"    <div class=\"matrix-cell-dot dot-good\">{goodVal}</div><div class=\"matrix-cell-dot dot-med\">{medVal}</div><div class=\"matrix-cell-dot dot-poor\">{poorVal}</div>\n" +
-            "    <div class=\"matrix-lbl\">LOW</div>\n" +
-            "    <div class=\"matrix-cell-dot dot-good\"></div><div class=\"matrix-cell-dot dot-med\"></div><div class=\"matrix-cell-dot dot-poor\"></div>\n" +
-            "    <div></div>\n" +
-            "    <div class=\"matrix-axis\">GOOD</div><div class=\"matrix-axis\">MEDIUM</div><div class=\"matrix-axis\">POOR</div>\n" +
-            "  </div>\n" +
-            "  <div style=\"font-size:7pt;font-weight:700;color:#666;margin-top:6px;\">HEALTH</div>\n" +
-            "</div>\n";
-    }
-
-    private static string BuildSemiCircleGaugeSvg(double score, int width = 64, int height = 36)
-    {
-        double clamped = Math.Clamp(score, 0.0, 10.0);
-        double ratio = clamped / 10.0;
-        double angleRad = Math.PI * (1.0 - ratio);
-
-        double cx = 32, cy = 30, r = 24;
-        double nx = cx + r * Math.Cos(angleRad);
-        double ny = cy - r * Math.Sin(angleRad);
-
-        return
-            $"<svg width=\"{width}\" height=\"{height}\" viewBox=\"0 0 64 36\" xmlns=\"http://www.w3.org/2000/svg\" style=\"margin:2px auto;display:block;\">\n" +
-            "  <path d=\"M 8 30 A 24 24 0 0 1 56 30\" fill=\"none\" stroke=\"#e5e7eb\" stroke-width=\"4\" stroke-linecap=\"round\"/>\n" +
-            "  <path d=\"M 8 30 A 24 24 0 0 1 40 10\" fill=\"none\" stroke=\"#009E4D\" stroke-width=\"4\" stroke-linecap=\"round\"/>\n" +
-            "  <path d=\"M 40 10 A 24 24 0 0 1 50 18\" fill=\"none\" stroke=\"#F5A623\" stroke-width=\"4\" stroke-linecap=\"round\"/>\n" +
-            "  <path d=\"M 50 18 A 24 24 0 0 1 56 30\" fill=\"none\" stroke=\"#D93025\" stroke-width=\"4\" stroke-linecap=\"round\"/>\n" +
-            $"  <line x1=\"32\" y1=\"30\" x2=\"{nx:F1}\" y2=\"{ny:F1}\" stroke=\"#111\" stroke-width=\"2\" stroke-linecap=\"round\"/>\n" +
-            "  <circle cx=\"32\" cy=\"30\" r=\"3\" fill=\"#111\"/>\n" +
-            "</svg>\n";
-    }
-
-    private static string BuildDualTrendSvg(List<ChartPointDto> pts, string unit, string strokeColor, int w = 320, int h = 95)
-    {
-        if (pts == null || pts.Count == 0)
+        if (totalCount <= 0 || (warnPct <= 0 && critPct <= 0))
         {
-            return $"<div style=\"height:{h}px;border:1px solid #e5e7eb;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:7pt;color:#888;background:#fafafa;\">Nominal {unit} Telemetry Logged</div>";
+            return
+                $"<svg width=\"100%\" height=\"{h}\" viewBox=\"0 0 {w} {h}\" xmlns=\"http://www.w3.org/2000/svg\">\n" +
+                $"  <circle cx=\"{cx}\" cy=\"{cy}\" r=\"{r}\" fill=\"#f3f4f6\" stroke=\"#e5e7eb\" stroke-width=\"1.5\"/>\n" +
+                $"  <text x=\"{cx}\" y=\"{cy + 3}\" font-size=\"7.5\" font-weight=\"600\" fill=\"#6b7280\" text-anchor=\"middle\">0 Alerts</text>\n" +
+                "  <circle cx=\"140\" cy=\"58\" r=\"3.5\" fill=\"#facc15\"/>\n" +
+                "  <text x=\"148\" y=\"61\" font-size=\"6.8\" font-weight=\"700\" fill=\"#9ca3af\">WARNING (0%)</text>\n" +
+                "  <circle cx=\"140\" cy=\"74\" r=\"3.5\" fill=\"#dc2626\"/>\n" +
+                "  <text x=\"148\" y=\"77\" font-size=\"6.8\" font-weight=\"700\" fill=\"#9ca3af\">CRITICAL (0%)</text>\n" +
+                "</svg>\n";
         }
 
-        double minV = pts.Min(p => p.Value);
-        double maxV = pts.Max(p => p.Value);
-        if (Math.Abs(maxV - minV) < 0.001)
+        var sb = new StringBuilder();
+        sb.Append(CultureInfo.InvariantCulture, $"<svg width=\"100%\" height=\"{h}\" viewBox=\"0 0 {w} {h}\" xmlns=\"http://www.w3.org/2000/svg\">\n");
+
+        if (critPct >= 99.5)
         {
-            maxV = minV + 1.0;
-            minV = Math.Max(0, minV - 1.0);
+            // 100% Critical: Full solid circle
+            sb.Append(CultureInfo.InvariantCulture, $"  <circle cx=\"{cx}\" cy=\"{cy}\" r=\"{r}\" fill=\"#dc2626\"/>\n");
+            sb.Append(CultureInfo.InvariantCulture, $"  <text x=\"{cx}\" y=\"{cy + 3}\" font-size=\"8.5\" font-weight=\"700\" fill=\"#ffffff\" text-anchor=\"middle\">100%</text>\n");
         }
-        double midV = (maxV + minV) / 2.0;
-
-        float leftMargin = 44;
-        float rightMargin = 12;
-        float topMargin = 10;
-        float bottomMargin = 20;
-        float cW = w - leftMargin - rightMargin;
-        float cH = h - topMargin - bottomMargin;
-
-        var line = new StringBuilder();
-        var area = new StringBuilder();
-        area.Append(CultureInfo.InvariantCulture, $"{leftMargin:F1},{topMargin + cH:F1} ");
-
-        for (int i = 0; i < pts.Count; i++)
+        else if (warnPct >= 99.5)
         {
-            float x = leftMargin + (i / Math.Max(1f, pts.Count - 1f)) * cW;
-            float y = topMargin + cH - (float)(((pts[i].Value - minV) / (maxV - minV)) * cH);
-            line.Append(CultureInfo.InvariantCulture, $"{x:F1},{y:F1} ");
-            area.Append(CultureInfo.InvariantCulture, $"{x:F1},{y:F1} ");
+            // 100% Warning: Full solid circle
+            sb.Append(CultureInfo.InvariantCulture, $"  <circle cx=\"{cx}\" cy=\"{cy}\" r=\"{r}\" fill=\"#facc15\"/>\n");
+            sb.Append(CultureInfo.InvariantCulture, $"  <text x=\"{cx}\" y=\"{cy + 3}\" font-size=\"8.5\" font-weight=\"700\" fill=\"#1f2937\" text-anchor=\"middle\">100%</text>\n");
         }
-        area.Append(CultureInfo.InvariantCulture, $"{leftMargin + cW:F1},{topMargin + cH:F1} ");
+        else
+        {
+            // Dual slices (both Warning and Critical exist)
+            double critAngle = (critPct / 100.0) * 360.0;
+            double rad1 = (-90.0 + critAngle) * Math.PI / 180.0;
+            double x1 = cx + r * Math.Cos(rad1);
+            double y1 = cy + r * Math.Sin(rad1);
+            int largeArc1 = critPct > 50.0 ? 1 : 0;
 
-        string startDate = pts.First().Time.ToString("dd MMM");
-        string midDate = pts[pts.Count / 2].Time.ToString("dd MMM");
-        string endDate = pts.Last().Time.ToString("dd MMM");
+            // Text positions inside slices
+            double midCritAngle = (-90.0 + critAngle / 2.0) * Math.PI / 180.0;
+            double xCritText = cx + (r * 0.55) * Math.Cos(midCritAngle);
+            double yCritText = cy + (r * 0.55) * Math.Sin(midCritAngle);
 
-        return
-            $"<svg width=\"100%\" height=\"{h}\" viewBox=\"0 0 {w} {h}\" xmlns=\"http://www.w3.org/2000/svg\" style=\"border:1px solid #e5e7eb;border-radius:4px;background:#fff;margin-top:2px;\">\n" +
-            $"  <line x1=\"{leftMargin}\" y1=\"{topMargin}\" x2=\"{w - rightMargin}\" y2=\"{topMargin}\" stroke=\"#f0f2f5\" stroke-width=\"1\"/>\n" +
-            $"  <line x1=\"{leftMargin}\" y1=\"{topMargin + cH / 2}\" x2=\"{w - rightMargin}\" y2=\"{topMargin + cH / 2}\" stroke=\"#f0f2f5\" stroke-width=\"1\"/>\n" +
-            $"  <line x1=\"{leftMargin}\" y1=\"{topMargin + cH}\" x2=\"{w - rightMargin}\" y2=\"{topMargin + cH}\" stroke=\"#e5e7eb\" stroke-width=\"1\"/>\n" +
-            $"  <text x=\"{leftMargin - 4}\" y=\"{topMargin + 4}\" font-size=\"6pt\" fill=\"#666\" text-anchor=\"end\">{maxV:F1} {unit}</text>\n" +
-            $"  <text x=\"{leftMargin - 4}\" y=\"{topMargin + cH / 2 + 3}\" font-size=\"6pt\" fill=\"#666\" text-anchor=\"end\">{midV:F1} {unit}</text>\n" +
-            $"  <text x=\"{leftMargin - 4}\" y=\"{topMargin + cH}\" font-size=\"6pt\" fill=\"#666\" text-anchor=\"end\">{minV:F1} {unit}</text>\n" +
-            $"  <polygon points=\"{area}\" fill=\"{strokeColor}\" fill-opacity=\"0.12\"/>\n" +
-            $"  <polyline points=\"{line}\" fill=\"none\" stroke=\"{strokeColor}\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n" +
-            $"  <text x=\"{leftMargin}\" y=\"{h - 5}\" font-size=\"6pt\" fill=\"#777\">{startDate}</text>\n" +
-            $"  <text x=\"{leftMargin + cW / 2}\" y=\"{h - 5}\" font-size=\"6pt\" fill=\"#777\" text-anchor=\"middle\">{midDate}</text>\n" +
-            $"  <text x=\"{w - rightMargin}\" y=\"{h - 5}\" font-size=\"6pt\" fill=\"#777\" text-anchor=\"end\">{endDate}</text>\n" +
-            "</svg>\n";
+            double midWarnAngle = (-90.0 + critAngle + (360.0 - critAngle) / 2.0) * Math.PI / 180.0;
+            double xWarnText = cx + (r * 0.65) * Math.Cos(midWarnAngle);
+            double yWarnText = cy + (r * 0.65) * Math.Sin(midWarnAngle);
+
+            // Critical Slice (Red)
+            sb.Append(CultureInfo.InvariantCulture, $"  <path d=\"M {cx:F1} {cy:F1} L {cx:F1} {cy - r:F1} A {r:F1} {r:F1} 0 {largeArc1} 1 {x1:F1} {y1:F1} Z\" fill=\"#dc2626\"/>\n");
+            // Warning Slice (Yellow)
+            sb.Append(CultureInfo.InvariantCulture, $"  <path d=\"M {cx:F1} {cy:F1} L {x1:F1} {y1:F1} A {r:F1} {r:F1} 0 {1 - largeArc1} 1 {cx:F1} {cy - r:F1} Z\" fill=\"#facc15\"/>\n");
+
+            // Percentage labels
+            sb.Append(CultureInfo.InvariantCulture, $"  <text x=\"{xCritText:F1}\" y=\"{yCritText + 3:F1}\" font-size=\"7.5\" font-weight=\"700\" fill=\"#ffffff\" text-anchor=\"middle\">{critPct:0}%</text>\n");
+            sb.Append(CultureInfo.InvariantCulture, $"  <text x=\"{xWarnText:F1}\" y=\"{yWarnText + 3:F1}\" font-size=\"7.5\" font-weight=\"700\" fill=\"#1f2937\" text-anchor=\"middle\">{warnPct:0}%</text>\n");
+        }
+
+        // Legend on right
+        sb.Append("  <circle cx=\"140\" cy=\"58\" r=\"3.5\" fill=\"#facc15\"/>\n");
+        sb.Append(CultureInfo.InvariantCulture, $"  <text x=\"148\" y=\"61\" font-size=\"6.8\" font-weight=\"700\" fill=\"#374151\">WARNING ({warnPct:0}%)</text>\n");
+        sb.Append("  <circle cx=\"140\" cy=\"74\" r=\"3.5\" fill=\"#dc2626\"/>\n");
+        sb.Append(CultureInfo.InvariantCulture, $"  <text x=\"148\" y=\"77\" font-size=\"6.8\" font-weight=\"700\" fill=\"#374151\">CRITICAL ({critPct:0}%)</text>\n");
+        sb.Append("</svg>\n");
+
+        return sb.ToString();
     }
 
-    private static string HealthStatusBar(string title, string color)
+    // ═══════════════════════════════════════════════════════════════════════
+    // SVG ALERTS COUNT STACKED BAR CHART
+    // ═══════════════════════════════════════════════════════════════════════
+    private static string BuildDailyAlertsStackedBarSvg(List<AlertDailyCountDto>? dailyCounts)
     {
-        return
-            "<div style=\"display:flex;align-items:center;margin:3px 0;font-size:7.5pt;\">\n" +
-            $"  <span style=\"width:150px;color:#333;\">{H(title)}</span>\n" +
-            $"  <span style=\"display:inline-block;width:16px;height:7px;background:{color};border-radius:2px;margin-right:6px;\"></span>\n" +
-            "  <span style=\"display:inline-block;width:40px;height:7px;background:#e5e7eb;border-radius:2px;\"></span>\n" +
-            "</div>\n";
+        const double w = 420.0;
+        const double h = 135.0;
+        const double left = 38.0;
+        const double right = 405.0;
+        const double top = 16.0;
+        const double bottom = 95.0;
+        const double chartW = right - left;
+        const double chartH = bottom - top;
+
+        var counts = dailyCounts ?? new List<AlertDailyCountDto>();
+        double maxY = 40.0;
+        foreach (var c in counts)
+        {
+            if (c.WarningCount + c.CriticalCount > maxY)
+                maxY = c.WarningCount + c.CriticalCount + 5.0;
+        }
+
+        var sb = new StringBuilder();
+        sb.Append(CultureInfo.InvariantCulture, $"<svg width=\"100%\" height=\"{h}\" viewBox=\"0 0 {w} {h}\" xmlns=\"http://www.w3.org/2000/svg\">\n");
+
+        // Y-axis Label "# OF ALERTS" (vertical)
+        sb.Append("  <text x=\"-55\" y=\"11\" transform=\"rotate(-90)\" font-size=\"6.5\" font-weight=\"600\" fill=\"#6b7280\" text-anchor=\"middle\"># OF ALERTS</text>\n");
+
+        // Y Gridlines at 0, 20, 40
+        double[] yTicks = new[] { 0.0, 20.0, 40.0 };
+        foreach (var val in yTicks)
+        {
+            double yPos = bottom - (val / maxY) * chartH;
+            sb.Append(CultureInfo.InvariantCulture, $"  <line x1=\"{left}\" y1=\"{yPos:F1}\" x2=\"{right}\" y2=\"{yPos:F1}\" stroke=\"#f3f4f6\" stroke-width=\"1\"/>\n");
+            sb.Append(CultureInfo.InvariantCulture, $"  <text x=\"{left - 5:F1}\" y=\"{yPos + 3:F1}\" font-size=\"6.8\" fill=\"#6b7280\" text-anchor=\"end\">{val:0}</text>\n");
+        }
+
+        // Baseline
+        sb.Append(CultureInfo.InvariantCulture, $"  <line x1=\"{left}\" y1=\"{bottom:F1}\" x2=\"{right}\" y2=\"{bottom:F1}\" stroke=\"#e5e7eb\" stroke-width=\"1\"/>\n");
+
+        // Stacked Bars
+        int numDays = counts.Count;
+        if (numDays > 0)
+        {
+            double step = chartW / Math.Max(1.0, numDays);
+            const double barW = 16.0;
+
+            for (int i = 0; i < numDays; i++)
+            {
+                var item = counts[i];
+                double xCenter = left + (i + 0.5) * step;
+                double barX = xCenter - barW / 2.0;
+
+                double critH = (item.CriticalCount / maxY) * chartH;
+                double warnH = (item.WarningCount / maxY) * chartH;
+                double critY = bottom - critH;
+                double warnY = critY - warnH;
+
+                // Bottom bar: Critical (Red)
+                if (critH > 0)
+                {
+                    sb.Append(CultureInfo.InvariantCulture, $"  <rect x=\"{barX:F1}\" y=\"{critY:F1}\" width=\"{barW}\" height=\"{critH:F1}\" fill=\"#dc2626\" rx=\"1\"/>\n");
+                }
+
+                // Top bar: Warning (Yellow)
+                if (warnH > 0)
+                {
+                    sb.Append(CultureInfo.InvariantCulture, $"  <rect x=\"{barX:F1}\" y=\"{warnY:F1}\" width=\"{barW}\" height=\"{warnH:F1}\" fill=\"#facc15\" rx=\"1\"/>\n");
+                }
+
+                // X-axis Day labels
+                sb.Append(CultureInfo.InvariantCulture, $"  <text x=\"{xCenter:F1}\" y=\"{bottom + 12:F1}\" font-size=\"7.2\" fill=\"#374151\" text-anchor=\"middle\">{item.Date:dd}</text>\n");
+                if (i == 0)
+                {
+                    sb.Append(CultureInfo.InvariantCulture, $"  <text x=\"{xCenter:F1}\" y=\"{bottom + 21:F1}\" font-size=\"6.5\" fill=\"#6b7280\" text-anchor=\"middle\">{item.Date:MMM}</text>\n");
+                }
+            }
+
+            // "DAYS" label centered below
+            double midX = left + chartW / 2.0;
+            sb.Append(CultureInfo.InvariantCulture, $"  <text x=\"{midX:F1}\" y=\"{bottom + 21:F1}\" font-size=\"6.8\" font-weight=\"600\" fill=\"#6b7280\" text-anchor=\"middle\">DAYS</text>\n");
+        }
+
+        // Legend below chart
+        sb.Append("  <rect x=\"130\" y=\"122\" width=\"18\" height=\"3\" fill=\"#facc15\" rx=\"1\"/>\n");
+        sb.Append("  <text x=\"153\" y=\"126\" font-size=\"6.8\" font-weight=\"700\" fill=\"#374151\">WARNING</text>\n");
+        sb.Append("  <rect x=\"215\" y=\"122\" width=\"18\" height=\"3\" fill=\"#dc2626\" rx=\"1\"/>\n");
+        sb.Append("  <text x=\"238\" y=\"126\" font-size=\"6.8\" font-weight=\"700\" fill=\"#374151\">CRITICAL</text>\n");
+
+        sb.Append("</svg>\n");
+        return sb.ToString();
     }
 
-    private static string PageFooter(int pageNum) =>
-        "<div class=\"pf\">" +
-        $"<span>{pageNum}</span>" +
-        "<span class=\"pf-brand\">Life Is On &nbsp;|&nbsp; Schneider Electric</span>" +
-        "</div>\n";
+    // ═══════════════════════════════════════════════════════════════════════
+    // COMMON FOOTER
+    // ═══════════════════════════════════════════════════════════════════════
+    private static string BuildPageFooter(DateTime genTime, int pageNum)
+    {
+        string genTimeStr = genTime != default ? genTime.ToString("MMM dd, yyyy hh:mm:sstt") : "Sep 12, 2026 12:00:00AM";
+
+        return
+            "  <div class=\"page-footer\">\n" +
+            "    <div class=\"pf-top\">\n" +
+            "      <div><strong>Generated By:</strong> Admin</div>\n" +
+            $"      <div><strong>Report Generated:</strong> {genTimeStr} | <span class=\"pf-page-num\">Page {pageNum}</span></div>\n" +
+            "    </div>\n" +
+            "    <div class=\"pf-line\"></div>\n" +
+            "    <div class=\"pf-bottom\">\n" +
+            "      <span class=\"pill-btn\">se.com/cf-digital-hub</span>\n" +
+            $"      <img src=\"data:image/png;base64,{SchneiderElectricLogoBase64}\" alt=\"Schneider Electric\" style=\"height:24px;width:auto;display:block;\" />\n" +
+            "    </div>\n" +
+            "  </div>\n";
+    }
 
     private static string H(string? s) =>
         System.Security.SecurityElement.Escape(s ?? string.Empty) ?? string.Empty;

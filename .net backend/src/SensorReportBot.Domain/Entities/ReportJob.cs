@@ -30,4 +30,8 @@ public class ReportJob
     public string? FileName { get; set; }
     public string? FilePath { get; set; }
     public byte[]? PdfData { get; set; }
+    public string? HtmlData { get; set; }
+    public long? DbDurationMs { get; set; }
+    public long? RenderDurationMs { get; set; }
+    public long? TotalDurationMs { get; set; }
 }

@@ -13,7 +13,7 @@ public interface IPdfJobQueue
     Task<ReportJob?> GetJobAsync(Guid jobId);
     Task<IReadOnlyList<ReportJobDto>> GetAllJobsAsync();
     Task UpdateJobProgressAsync(Guid jobId, int progressPercentage, string statusMessage);
-    Task CompleteJobAsync(Guid jobId, byte[] pdfData, string fileName);
+    Task CompleteJobAsync(Guid jobId, byte[] pdfData, string fileName, string? htmlData = null, long? dbDurationMs = null, long? renderDurationMs = null, long? totalDurationMs = null);
     Task FailJobAsync(Guid jobId, string errorMessage);
     Task<bool> CancelJobAsync(Guid jobId);
     Task<byte[]?> GetJobPdfAsync(Guid jobId);

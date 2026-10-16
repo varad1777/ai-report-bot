@@ -17,30 +17,28 @@ using SensorReportBot.Application.Interfaces;
 ///   3. HTML template render     (Evidence + Narrative → HTML string)
 ///   4. Chromium PDF conversion  (HTML → PDF bytes)
 ///
-/// Steps 1 and 2 run sequentially (LLM requires evidence first).
-/// Steps 3 and 4 are fast (< 400ms combined).
+///   1. SQL evidence extraction  (TimescaleDB → ReportEvidenceDto)
+///   2. HTML template render     (Evidence → HTML string)
+///   3. Chromium PDF conversion  (HTML → PDF bytes)
 /// </summary>
 public class EcoReportService : IPdfReportService
 {
     private readonly IReportEvidenceService _evidenceService;
-    private readonly IReportNarrativeService _narrativeService;
     private readonly EcoReportHtmlBuilder _htmlBuilder;
     private readonly ILogger<EcoReportService> _logger;
 
     public EcoReportService(
         IReportEvidenceService evidenceService,
-        IReportNarrativeService narrativeService,
         EcoReportHtmlBuilder htmlBuilder,
         ILogger<EcoReportService> logger)
     {
         _evidenceService  = evidenceService;
-        _narrativeService = narrativeService;
         _htmlBuilder      = htmlBuilder;
         _logger           = logger;
     }
 
     /// <summary>
-    /// Full pipeline: TimescaleDB → LLM → HTML → PDF bytes.
+    /// Full pipeline: TimescaleDB → HTML → PDF bytes.
     /// Called by PdfGenerationBackgroundService via IPdfReportService directly with asset parameters.
     /// </summary>
     public async Task<byte[]> GeneratePdfAsync(
@@ -50,66 +48,83 @@ public class EcoReportService : IPdfReportService
         Func<int, string, Task>? onProgress = null, 
         CancellationToken ct = default)
     {
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        _logger.LogInformation("EcoReportService.GeneratePdfAsync started for AssetId={AssetId}", assetId);
+        var result = await GenerateReportResultAsync(assetId, from, to, onProgress, ct);
+        return result.PdfBytes;
+    }
+
+    public async Task<PdfGenerationResult> GenerateReportResultAsync(
+        int assetId, 
+        DateTime from, 
+        DateTime to, 
+        Func<int, string, Task>? onProgress = null, 
+        CancellationToken ct = default)
+    {
+        var totalSw = System.Diagnostics.Stopwatch.StartNew();
+        _logger.LogInformation("EcoReportService.GenerateReportResultAsync started for AssetId={AssetId}", assetId);
 
         // ── Phase 1: SQL Evidence extraction ──────────────────────────────
         if (onProgress != null)
         {
-            await onProgress(20, "Extracting telemetry evidence and domain aggregates from TimescaleDB...");
+            await onProgress(25, "Extracting telemetry evidence and domain aggregates from TimescaleDB...");
         }
 
+        var dbSw = System.Diagnostics.Stopwatch.StartNew();
         var evidence = await _evidenceService.BuildEvidenceAsync(
             assetId,
             from,
             to,
             ct);
-        _logger.LogInformation("Phase 1 (SQL Evidence) complete — {Ms}ms", sw.ElapsedMilliseconds);
+        dbSw.Stop();
+        long dbDurationMs = dbSw.ElapsedMilliseconds;
+        _logger.LogInformation("Phase 1 (SQL Evidence) complete — {Ms}ms", dbDurationMs);
 
-        // ── Phase 2: LLM narrative generation ─────────────────────────────
+        // ── Phase 2: Build HTML string ────────────────────────────────────
         if (onProgress != null)
         {
-            await onProgress(50, "Generating AI diagnostic inferences & narrative analysis via LLM...");
+            await onProgress(65, "Compiling EcoStruxure™ Motor Predict publication layout...");
         }
 
-        var narrative = await _narrativeService.GenerateNarrativeAsync(evidence, ct);
-        _logger.LogInformation("Phase 2 (LLM Narrative) complete — {Ms}ms", sw.ElapsedMilliseconds);
-
-        // ── Phase 3: Build HTML string ────────────────────────────────────
-        if (onProgress != null)
-        {
-            await onProgress(75, "Compiling 8-page EcoStruxure™ publication layout...");
-        }
-
+        var renderSw = System.Diagnostics.Stopwatch.StartNew();
         string reportId = $"ECO-{DateTime.UtcNow:yyyyMMdd}-{assetId:D4}";
         var model = new EcoReportModel
         {
             Evidence    = evidence,
-            Narrative   = narrative,
             GeneratedAt = DateTime.UtcNow,
             ReportId    = reportId
         };
 
         string html = _htmlBuilder.Build(model);
-        _logger.LogInformation("Phase 3 (HTML Template) complete — {Ms}ms, HTML chars={C}", sw.ElapsedMilliseconds, html.Length);
+        _logger.LogInformation("Phase 2 (HTML Template) complete — HTML chars={C}", html.Length);
 
-        // ── Phase 4: HTML → PDF via Chromium/Playwright ───────────────────
+        // ── Phase 3: HTML → PDF via Chromium/Playwright ───────────────────
         if (onProgress != null)
         {
-            await onProgress(90, "Rendering publication-grade PDF via headless Chromium...");
+            await onProgress(85, "Rendering publication-grade PDF via headless Chromium...");
         }
 
         byte[] pdfBytes = await ConvertHtmlToPdfAsync(html, ct);
+        renderSw.Stop();
+        long renderDurationMs = renderSw.ElapsedMilliseconds;
+        totalSw.Stop();
+        long totalDurationMs = totalSw.ElapsedMilliseconds;
+
         _logger.LogInformation(
-            "EcoReportService complete — TotalMs={Ms}, PDFBytes={B}",
-            sw.ElapsedMilliseconds, pdfBytes.Length);
+            "EcoReportService complete — DbMs={DbMs}, RenderMs={RenderMs}, TotalMs={TotalMs}, PDFBytes={B}",
+            dbDurationMs, renderDurationMs, totalDurationMs, pdfBytes.Length);
 
         if (onProgress != null)
         {
-            await onProgress(98, "Finalizing report file...");
+            await onProgress(100, "Finalizing report file...");
         }
 
-        return pdfBytes;
+        return new PdfGenerationResult
+        {
+            PdfBytes = pdfBytes,
+            Html = html,
+            DbDurationMs = dbDurationMs,
+            RenderDurationMs = renderDurationMs,
+            TotalDurationMs = totalDurationMs
+        };
     }
 
     // ─────────────────────────────────────────────────────────────────────

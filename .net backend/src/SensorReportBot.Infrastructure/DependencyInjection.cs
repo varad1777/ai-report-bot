@@ -22,14 +22,12 @@ public static class DependencyInjection
             client.Timeout = TimeSpan.FromSeconds(Math.Max(5, llm.TimeoutSeconds));
         });
 
-        // Bind Laya System-1 Fast Decision Engine options & HttpClient
+        // Bind System-1 Fast Decision Engine options
         services.Configure<LayaOptions>(configuration.GetSection(LayaOptions.SectionName));
-        services.AddHttpClient<ILayaClient, LayaClient>((sp, client) =>
-        {
-            var laya = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<LayaOptions>>().Value;
-            client.BaseAddress = new Uri(laya.BaseUrl.TrimEnd('/') + "/");
-            client.Timeout = TimeSpan.FromSeconds(Math.Max(1, laya.TimeoutSeconds));
-        });
+
+        // Native .NET In-Process ONNX Decision Engine (zero Python runtime, direct ~15-30ms inference)
+        services.AddSingleton<OnnxDecisionEngine>();
+        services.AddSingleton<ILayaClient>(sp => sp.GetRequiredService<OnnxDecisionEngine>());
 
         // System prompt provider (reads system prompts from Prompts/ directory)
         services.AddSingleton<IPromptProvider, FilePromptProvider>();
@@ -57,6 +55,9 @@ public static class DependencyInjection
         // PDF Generation Asynchronous In-Memory Job Queue & Background Service
         services.AddSingleton<IPdfJobQueue, InMemoryPdfJobQueue>();
         services.AddHostedService<PdfGenerationBackgroundService>();
+
+        // Pre-warm LLM model and pre-cache System Prompt KV-cache on application boot
+        services.AddHostedService<LlmWarmupBackgroundService>();
 
         return services;
     }

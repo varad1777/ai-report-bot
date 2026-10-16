@@ -22,5 +22,5 @@ public class LlmOptions
     public bool UseJsonSchema { get; set; } = true;
 
     /// <summary>HTTP timeout for one completion. Edge CPUs can be slow on the first (cold) request.</summary>
-    public int TimeoutSeconds { get; set; } = 90;
+    public int TimeoutSeconds { get; set; } = 300;
 }

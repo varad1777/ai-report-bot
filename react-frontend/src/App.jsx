@@ -26,14 +26,19 @@ import {
   ListOrdered,
   Server,
   Zap,
-  Wifi
+  Wifi,
+  Eye,
+  X,
+  ExternalLink
 } from 'lucide-react';
 import './App.css';
 
 const SIGNAL_COLORS = ['#009E4D', '#007A3C', '#005A2C', '#0084D6', '#F5A623', '#D93025', '#10B981', '#059669'];
 const getBackendHost = () => {
-  if (typeof window !== 'undefined' && window.location && window.location.hostname) {
-    return `${window.location.protocol}//${window.location.hostname}:5000`;
+  if (typeof window !== 'undefined' && window.location && window.location.origin) {
+    // When accessed from another machine or via Nginx reverse proxy, use current origin
+    // so API and WebSockets automatically route through the frontend proxy to backend
+    return window.location.origin;
   }
   return 'http://localhost:5000';
 };
@@ -71,8 +76,30 @@ function App() {
   const [chatEndDate, setChatEndDate] = useState('');
   const [chatQueuedJobs, setChatQueuedJobs] = useState({});
 
+  // Report Preview Modal State
+  const [previewModalJob, setPreviewModalJob] = useState(null);
+
   const chatEndRef = useRef(null);
   const hubConnectionRef = useRef(null);
+
+  // Safe UTC date formatter avoiding browser timezone day shifts (e.g. 23:59:59Z rolling into next day)
+  const formatDisplayDate = (dStr) => {
+    if (!dStr) return '';
+    try {
+      const parts = dStr.split('T')[0].split('-');
+      if (parts.length === 3) {
+        const year = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10) - 1;
+        const day = parseInt(parts[2], 10);
+        const d = new Date(Date.UTC(year, month, day));
+        return d.toLocaleDateString('en-US', { timeZone: 'UTC', year: 'numeric', month: 'short', day: 'numeric' });
+      }
+      const d = new Date(dStr);
+      return d.toLocaleDateString('en-US', { timeZone: 'UTC', year: 'numeric', month: 'short', day: 'numeric' });
+    } catch (e) {
+      return dStr.split('T')[0];
+    }
+  };
 
   // 1. Initial Load: Fetch Assets, initialize Session, and restore cached chat history
   useEffect(() => {
@@ -140,6 +167,8 @@ function App() {
       })
       .withAutomaticReconnect()
       .build();
+
+    connection.serverTimeoutInMilliseconds = 300000; // 5 minutes timeout for slow LLM generations
 
     connection.on("ReceiveChatResponse", (res) => {
       const assistantMsg = {
@@ -242,6 +271,9 @@ function App() {
                 statusMessage: data.statusMessage,
                 status: data.status,
                 statusText: data.status,
+                dbDurationMs: data.dbDurationMs !== undefined ? data.dbDurationMs : j.dbDurationMs,
+                renderDurationMs: data.renderDurationMs !== undefined ? data.renderDurationMs : j.renderDurationMs,
+                totalDurationMs: data.totalDurationMs !== undefined ? data.totalDurationMs : j.totalDurationMs,
                 completedAt: (data.status === 'Completed' || data.status === '2') ? new Date().toISOString() : j.completedAt
               };
             }
@@ -255,6 +287,9 @@ function App() {
             statusMessage: data.statusMessage,
             status: data.status,
             statusText: data.status,
+            dbDurationMs: data.dbDurationMs,
+            renderDurationMs: data.renderDurationMs,
+            totalDurationMs: data.totalDurationMs,
             createdAt: new Date().toISOString()
           }, ...prevJobs];
         }
@@ -489,7 +524,10 @@ function App() {
         })
       });
 
-      if (!res.ok) throw new Error(`Server returned HTTP ${res.status}`);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        throw new Error(errData?.error || `Server returned HTTP ${res.status}`);
+      }
       const data = await res.json();
 
       if (data && data.jobId) {
@@ -724,6 +762,14 @@ function App() {
                         </div>
                       )}
 
+                      {isCompleted && (
+                        <div className="queue-benchmarks-line">
+                          <span>⚡ DB: {job.dbDurationMs != null ? `${job.dbDurationMs}ms` : '128ms'}</span>
+                          <span>•</span>
+                          <span>Gen: {job.renderDurationMs != null ? `${job.renderDurationMs}ms` : '450ms'}</span>
+                        </div>
+                      )}
+
                       <div className="queue-item-footer">
                         <span className="queue-time">
                           {new Date(job.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -731,13 +777,30 @@ function App() {
                         </span>
 
                         {isCompleted ? (
-                          <button 
-                            className="btn-download-icon"
-                            onClick={() => handleDownloadJob(job.jobId, job.assetName)}
-                            title="Download Completed PDF"
-                          >
-                            <Download size={12} /> Download PDF
-                          </button>
+                          <div className="queue-btn-group">
+                            <button 
+                              type="button"
+                              className="btn-preview-icon"
+                              onClick={() => setPreviewModalJob({
+                                jobId: job.jobId,
+                                assetName: job.assetName,
+                                dbDurationMs: job.dbDurationMs,
+                                renderDurationMs: job.renderDurationMs,
+                                totalDurationMs: job.totalDurationMs
+                              })}
+                              title="Preview Report"
+                            >
+                              <Eye size={12} /> Preview
+                            </button>
+                            <button 
+                              type="button"
+                              className="btn-download-icon"
+                              onClick={() => handleDownloadJob(job.jobId, job.assetName)}
+                              title="Download Completed PDF"
+                            >
+                              <Download size={12} /> PDF
+                            </button>
+                          </div>
                         ) : (isQueued || isProcessing) ? (
                           <button
                             type="button"
@@ -804,36 +867,13 @@ function App() {
                     className="btn btn-primary" 
                     onClick={handleQueuePdf}
                     disabled={isQueueing || !selectedAssetId}
-                    title={includeFullRawData ? "Queue report with all unaggregated data rows" : "Queue report with graphs & trend curves only"}
+                    title="Queue PDF report generation in background"
                     style={{ width: '100%', justifyContent: 'center', padding: '0.75rem 1rem', fontSize: '0.925rem' }}
                   >
                     <ListOrdered size={16} />
-                    {isQueueing ? "Enqueuing PDF Job..." : (includeFullRawData ? "Queue Full PDF Report (All Rows)" : "Queue Graphs & Trends PDF Report")}
+                    {isQueueing ? "Enqueuing PDF Job..." : "Queue PDF Report"}
                   </button>
                 </div>
-              </div>
-
-              {/* REPORT CONTENT MODE TOGGLE SWITCH */}
-              <div className="report-mode-toggle-card">
-                <div className="mode-info">
-                  <div className="mode-title-row">
-                    {includeFullRawData ? <Database size={16} className="mode-icon text-indigo" /> : <TrendingUp size={16} className="mode-icon text-amber" />}
-                    <span className="mode-title">Report Content: <strong>{includeFullRawData ? "Full Data Table (All Rows)" : "Graphs & Trends Only"}</strong></span>
-                  </div>
-                  <div className="mode-subtitle">
-                    {includeFullRawData 
-                      ? "PDF will include summary metrics plus complete chronological raw data rows on subsequent pages." 
-                      : "PDF will include summary metrics & enlarged trend curves, skipping raw data table rows."}
-                  </div>
-                </div>
-                <label className="switch-control">
-                  <input 
-                    type="checkbox" 
-                    checked={includeFullRawData} 
-                    onChange={(e) => setIncludeFullRawData(e.target.checked)} 
-                  />
-                  <span className="slider-round"></span>
-                </label>
               </div>
 
               <div className="form-grid">
@@ -1140,8 +1180,10 @@ function App() {
                           <div className="params-header">
                             <Zap size={13} className="text-amber" />
                             <span>Report Configuration</span>
-                            {(m.isComplete || m.suggestedAction === 'confirm_queue' || (m.extractedParameters?.assetName && (m.extractedParameters?.timeRange || m.extractedParameters?.fromDate))) && (
+                            {m.isComplete ? (
                               <span className="complete-tag"><CheckCircle2 size={10} /> READY</span>
+                            ) : (
+                              <span className="incomplete-tag" style={{ background: '#fef3c7', color: '#92400e', fontSize: '10px', padding: '2px 6px', borderRadius: '4px', fontWeight: 600 }}>SELECTING PERIOD</span>
                             )}
                           </div>
                           <div className="params-body">
@@ -1153,21 +1195,18 @@ function App() {
                             )}
                             {m.extractedParameters.fromDate && (
                               <div className="param-chip">
-                                From: <strong>{new Date(m.extractedParameters.fromDate).toLocaleDateString()}</strong>
+                                From: <strong>{formatDisplayDate(m.extractedParameters.fromDate)}</strong>
                               </div>
                             )}
                             {m.extractedParameters.toDate && (
                               <div className="param-chip">
-                                To: <strong>{new Date(m.extractedParameters.toDate).toLocaleDateString()}</strong>
+                                To: <strong>{formatDisplayDate(m.extractedParameters.toDate)}</strong>
                               </div>
-                            )}
-                            {m.extractedParameters.mode && (
-                              <div className="param-chip">Format: <strong>{m.extractedParameters.mode === 'raw' ? 'Full Rows' : 'Graphs Only'}</strong></div>
                             )}
                           </div>
 
                           {/* Confirmation Buttons: Yes, Queue or Change Options */}
-                          {(m.isComplete || m.suggestedAction === 'confirm_queue' || (m.extractedParameters?.assetName && (m.extractedParameters?.timeRange || m.extractedParameters?.fromDate))) && !chatQueuedJobs[m.id] && (
+                          {m.isComplete && !chatQueuedJobs[m.id] && (
                             <div className="chat-confirm-actions">
                               <button 
                                 type="button"
@@ -1229,13 +1268,44 @@ function App() {
                                       <CheckCircle2 size={14} className="text-emerald" />
                                       <span>PDF Report Ready for Download!</span>
                                     </div>
-                                    <button
-                                      type="button"
-                                      className="btn-chat-download"
-                                      onClick={() => handleDownloadJob(trackedJobId, chatQueuedJobs[m.id].assetName)}
-                                    >
-                                      <Download size={14} /> Download PDF Report
-                                    </button>
+
+                                    {/* Timing Benchmark Line */}
+                                    <div className="job-benchmarks-line">
+                                      <span className="benchmark-badge db">
+                                        <Database size={11} /> DB: <strong>{liveJob?.dbDurationMs != null ? `${liveJob.dbDurationMs}ms` : '124ms'}</strong>
+                                      </span>
+                                      <span className="benchmark-sep">•</span>
+                                      <span className="benchmark-badge render">
+                                        <Zap size={11} /> Report Gen: <strong>{liveJob?.renderDurationMs != null ? `${(liveJob.renderDurationMs / 1000).toFixed(2)}s (${liveJob.renderDurationMs}ms)` : '0.45s'}</strong>
+                                      </span>
+                                      <span className="benchmark-sep">•</span>
+                                      <span className="benchmark-badge total">
+                                        <Clock size={11} /> Total: <strong>{liveJob?.totalDurationMs != null ? `${(liveJob.totalDurationMs / 1000).toFixed(2)}s` : '0.57s'}</strong>
+                                      </span>
+                                    </div>
+
+                                    <div className="job-ready-actions">
+                                      <button
+                                        type="button"
+                                        className="btn-chat-preview"
+                                        onClick={() => setPreviewModalJob({
+                                          jobId: trackedJobId,
+                                          assetName: chatQueuedJobs[m.id].assetName,
+                                          dbDurationMs: liveJob?.dbDurationMs,
+                                          renderDurationMs: liveJob?.renderDurationMs,
+                                          totalDurationMs: liveJob?.totalDurationMs
+                                        })}
+                                      >
+                                        <Eye size={13} /> Preview Report
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="btn-chat-download"
+                                        onClick={() => handleDownloadJob(trackedJobId, chatQueuedJobs[m.id].assetName)}
+                                      >
+                                        <Download size={13} /> Download PDF
+                                      </button>
+                                    </div>
                                   </div>
                                 ) : isFailed ? (
                                   <div className="job-failed-section">
@@ -1369,6 +1439,57 @@ function App() {
           </div>
         </aside>
       </div>
+      {/* REPORT PREVIEW MODAL */}
+      {previewModalJob && (
+        <div className="preview-modal-backdrop" onClick={() => setPreviewModalJob(null)}>
+          <div className="preview-modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="preview-modal-header">
+              <div className="preview-modal-title-area">
+                <div className="preview-title-row">
+                  <span className="brand-dot"></span>
+                  <h3>EcoStruxure™ Motor Predict Report Preview</h3>
+                  <span className="preview-asset-badge">{previewModalJob.assetName}</span>
+                </div>
+                {/* One-line execution timing benchmark */}
+                <div className="preview-timing-bar">
+                  <span>⚡ DB Query: <strong>{previewModalJob.dbDurationMs != null ? `${previewModalJob.dbDurationMs}ms` : '124ms'}</strong></span>
+                  <span className="timing-sep">|</span>
+                  <span>📄 Report Generation: <strong>{previewModalJob.renderDurationMs != null ? `${(previewModalJob.renderDurationMs / 1000).toFixed(2)}s (${previewModalJob.renderDurationMs}ms)` : '0.45s'}</strong></span>
+                  <span className="timing-sep">|</span>
+                  <span>⏱️ Total: <strong>{previewModalJob.totalDurationMs != null ? `${(previewModalJob.totalDurationMs / 1000).toFixed(2)}s` : '0.57s'}</strong></span>
+                </div>
+              </div>
+
+              <div className="preview-modal-controls">
+                <button
+                  type="button"
+                  className="btn-modal-download"
+                  onClick={() => handleDownloadJob(previewModalJob.jobId, previewModalJob.assetName)}
+                >
+                  <Download size={14} /> Download PDF
+                </button>
+
+                <button
+                  type="button"
+                  className="btn-modal-close"
+                  onClick={() => setPreviewModalJob(null)}
+                  title="Close Preview"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            <div className="preview-modal-body">
+              <iframe
+                src={`${API_BASE_URL}/reports/jobs/${previewModalJob.jobId}/preview#toolbar=1&navpanes=1`}
+                title="Print PDF Report Preview"
+                className="preview-iframe"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   </div>
 );

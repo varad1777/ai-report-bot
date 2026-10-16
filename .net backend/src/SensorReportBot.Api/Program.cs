@@ -23,7 +23,12 @@ builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 
 builder.Services.AddControllers();
-builder.Services.AddSignalR();
+builder.Services.AddSignalR(options =>
+{
+    options.ClientTimeoutInterval = TimeSpan.FromMinutes(5);
+    options.HandshakeTimeout = TimeSpan.FromSeconds(60);
+    options.KeepAliveInterval = TimeSpan.FromSeconds(15);
+});
 builder.Services.AddSingleton<SensorReportBot.Application.Interfaces.IJobProgressNotifier, SensorReportBot.Api.Services.SignalRJobProgressNotifier>();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -37,13 +42,7 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowReactDev", policy =>
     {
-        policy.SetIsOriginAllowed(origin =>
-              {
-                  if (string.IsNullOrEmpty(origin)) return false;
-                  var uri = new Uri(origin);
-                  return uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
-                         uri.Host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase);
-              })
+        policy.SetIsOriginAllowed(_ => true)
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials();

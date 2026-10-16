@@ -22,7 +22,12 @@ public class ReportJobDto
     public string? ErrorMessage { get; set; }
     public long? FileSizeBytes { get; set; }
     public string? FileName { get; set; }
+    public long? DbDurationMs { get; set; }
+    public long? RenderDurationMs { get; set; }
+    public long? TotalDurationMs { get; set; }
     public string DownloadUrl => $"/api/reports/jobs/{JobId}/download";
+    public string PreviewUrl => $"/api/reports/jobs/{JobId}/preview";
+    public string HtmlUrl => $"/api/reports/jobs/{JobId}/html";
 }
 
 public class EnqueueJobResponseDto

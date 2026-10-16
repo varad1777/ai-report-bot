@@ -285,6 +285,51 @@ public class TelemetryRepository : ITelemetryRepository
         return report;
     }
 
+    public async Task<(bool HasData, long PointCount, DateTime? MinRecordedTime, DateTime? MaxRecordedTime)> CheckDataAvailabilityAsync(
+        int assetId, 
+        DateTime from, 
+        DateTime to, 
+        CancellationToken ct = default)
+    {
+        using var conn = CreateConnection();
+
+        const string sql = @"
+            SELECT 
+                COUNT(*) AS PointCount,
+                MIN(time) AS MinPeriodTime,
+                MAX(time) AS MaxPeriodTime
+            FROM signal_data sd
+            JOIN signals s ON s.signal_id = sd.signal_id
+            WHERE s.asset_id = @AssetId
+              AND sd.time >= @From AND sd.time <= @To;";
+
+        var row = await conn.QueryFirstOrDefaultAsync(sql, new { AssetId = assetId, From = from, To = to });
+        long count = row != null ? (long)row.pointcount : 0L;
+
+        DateTime? minGlobal = null;
+        DateTime? maxGlobal = null;
+
+        if (count == 0)
+        {
+            // Query global boundaries for this asset to provide helpful guidance to user
+            const string boundarySql = @"
+                SELECT 
+                    MIN(sd.time) AS MinTime, 
+                    MAX(sd.time) AS MaxTime 
+                FROM signal_data sd
+                JOIN signals s ON s.signal_id = sd.signal_id
+                WHERE s.asset_id = @AssetId;";
+            var bounds = await conn.QueryFirstOrDefaultAsync(boundarySql, new { AssetId = assetId });
+            if (bounds != null)
+            {
+                minGlobal = bounds.mintime != null ? (DateTime)bounds.mintime : null;
+                maxGlobal = bounds.maxtime != null ? (DateTime)bounds.maxtime : null;
+            }
+        }
+
+        return (count > 0, count, minGlobal, maxGlobal);
+    }
+
     private class RawTelemetryRow
     {
         public int SignalId { get; set; }
