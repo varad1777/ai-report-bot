@@ -33,11 +33,11 @@ public class ReportEvidenceService : IReportEvidenceService
     private NpgsqlConnection CreateConnection() => new(_connectionString);
 
     public async Task<ReportEvidenceDto> BuildEvidenceAsync(
-        int assetId, DateTime from, DateTime to, CancellationToken ct = default)
+        int assetId, DateTime from, DateTime to, string? category = null, CancellationToken ct = default)
     {
         _logger.LogInformation(
-            "Building EcoStruxure report evidence for AssetId={AssetId} from {From:u} to {To:u}",
-            assetId, from, to);
+            "Building EcoStruxure report evidence for AssetId={AssetId}, Category={Category} from {From:u} to {To:u}",
+            assetId, category, from, to);
 
         await using var conn = CreateConnection();
         await conn.OpenAsync(ct);
@@ -52,21 +52,49 @@ public class ReportEvidenceService : IReportEvidenceService
             ?? allAssets.FirstOrDefault()
             ?? new AssetDto { AssetId = assetId, Name = $"Asset-{assetId}", AssetType = "Motor", Location = "Plant" };
 
-        // ── 2. Signals for this asset (10 signals prioritizing those with excursions/alerts) ───
-        const string signalSql = @"
-            SELECT s.signal_id AS SignalId, s.asset_id AS AssetId, s.name AS Name, s.unit AS Unit, 
-                   s.min_value AS MinValue, s.max_value AS MaxValue, 
-                   COALESCE(s.critical_min_value, -2) AS CriticalMinValue, 
-                   COALESCE(s.critical_max_value, 12) AS CriticalMaxValue 
-            FROM signals s 
-            WHERE s.asset_id = @AssetId 
-            ORDER BY 
-                (SELECT COUNT(*) FROM alerts a WHERE a.signal_id = s.signal_id AND a.triggered_at >= @From AND a.triggered_at <= @To) DESC,
-                (SELECT COUNT(*) FROM signal_data sd WHERE sd.signal_id = s.signal_id AND sd.time >= @From AND sd.time <= @To AND (sd.value > s.max_value OR sd.value < s.min_value)) DESC,
-                s.signal_id ASC
-            LIMIT 10;";
+        // ── 2. Signals for this asset (all signals if category specified, else top 10) ───
+        List<SignalDto> signals;
+        if (!string.IsNullOrWhiteSpace(category))
+        {
+            const string categorySignalSql = @"
+                SELECT s.signal_id AS SignalId, s.asset_id AS AssetId, s.category AS Category, s.name AS Name, s.unit AS Unit, 
+                       s.min_value AS MinValue, s.max_value AS MaxValue, 
+                       COALESCE(s.critical_min_value, -2) AS CriticalMinValue, 
+                       COALESCE(s.critical_max_value, 12) AS CriticalMaxValue 
+                FROM signals s 
+                WHERE s.asset_id = @AssetId AND LOWER(s.category) = LOWER(@Category)
+                ORDER BY s.signal_id ASC;";
+            signals = (await conn.QueryAsync<SignalDto>(categorySignalSql, new { AssetId = selectedAsset.AssetId, Category = category.Trim() })).ToList();
+            if (signals.Count == 0)
+            {
+                const string fallbackSql = @"
+                    SELECT s.signal_id AS SignalId, s.asset_id AS AssetId, s.category AS Category, s.name AS Name, s.unit AS Unit, 
+                           s.min_value AS MinValue, s.max_value AS MaxValue, 
+                           COALESCE(s.critical_min_value, -2) AS CriticalMinValue, 
+                           COALESCE(s.critical_max_value, 12) AS CriticalMaxValue 
+                    FROM signals s 
+                    WHERE s.asset_id = @AssetId 
+                    ORDER BY s.signal_id ASC LIMIT 10;";
+                signals = (await conn.QueryAsync<SignalDto>(fallbackSql, new { AssetId = selectedAsset.AssetId })).ToList();
+            }
+        }
+        else
+        {
+            const string signalSql = @"
+                SELECT s.signal_id AS SignalId, s.asset_id AS AssetId, s.category AS Category, s.name AS Name, s.unit AS Unit, 
+                       s.min_value AS MinValue, s.max_value AS MaxValue, 
+                       COALESCE(s.critical_min_value, -2) AS CriticalMinValue, 
+                       COALESCE(s.critical_max_value, 12) AS CriticalMaxValue 
+                FROM signals s 
+                WHERE s.asset_id = @AssetId 
+                ORDER BY 
+                    (SELECT COUNT(*) FROM alerts a WHERE a.signal_id = s.signal_id AND a.triggered_at >= @From AND a.triggered_at <= @To) DESC,
+                    (SELECT COUNT(*) FROM signal_data sd WHERE sd.signal_id = s.signal_id AND sd.time >= @From AND sd.time <= @To AND (sd.value > s.max_value OR sd.value < s.min_value)) DESC,
+                    s.signal_id ASC
+                LIMIT 10;";
+            signals = (await conn.QueryAsync<SignalDto>(signalSql, new { AssetId = selectedAsset.AssetId, From = from, To = to })).ToList();
+        }
 
-        var signals = (await conn.QueryAsync<SignalDto>(signalSql, new { AssetId = selectedAsset.AssetId, From = from, To = to })).ToList();
         var signalIds = signals.Select(s => s.SignalId).ToArray();
 
         // ── 3. Strictly use requested analysis period (no artificial shifting) ───
@@ -329,6 +357,7 @@ public class ReportEvidenceService : IReportEvidenceService
         return new ReportEvidenceDto
         {
             Asset             = selectedAsset,
+            SelectedCategory  = category,
             AllAssets         = allAssets,
             From              = from,
             To                = to,

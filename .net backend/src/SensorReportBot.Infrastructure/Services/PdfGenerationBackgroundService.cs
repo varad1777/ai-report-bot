@@ -84,6 +84,7 @@ public class PdfGenerationBackgroundService : BackgroundService
             job.AssetId, 
             fromTime, 
             toTime, 
+            job.Category,
             async (percent, message) =>
             {
                 if (job.Status != SensorReportBot.Domain.Enums.ReportJobStatus.Cancelled)

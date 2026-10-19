@@ -57,37 +57,54 @@ public class IntentExtractionStep : IChatStep
     {
         var assets = await _telemetryRepo.GetAssetsAsync(ct);
         string? layaHintNote = null;
+        IReadOnlyList<string> availableCategories = Array.Empty<string>();
+        LayaAnalysis? analysis = null;
 
-        // ── 1. Fast-Path & Hint Extraction (Laya System-1 ~25ms) ──
+        // ── 1. Cognitive Pre-Processing via Jev (System-1 ONNX ~25ms) ──
         if (_layaClient.IsEnabled)
         {
             try
             {
-                var analysis = await AnalyzeWithLayaAsync(state, assets, ct);
-                if (analysis.FastResult != null)
-                {
-                    state.Reply = analysis.FastResult.Reply;
-                    state.IsOnTopic = analysis.FastResult.IsOnTopic;
-                    state.IsComplete = analysis.FastResult.IsComplete;
-                    state.SuggestedAction = analysis.FastResult.SuggestedAction;
-                    state.SuggestedOptions = analysis.FastResult.SuggestedOptions.ToList();
-                    state.ExtractedParameters = analysis.FastResult.Parameters;
-                    return;
-                }
+                analysis = await AnalyzeWithLayaAsync(state, assets, ct);
+                availableCategories = analysis.AvailableCategories;
 
-                // Pass Laya's System-1 pre-analysis hints directly into Qwen
+                // Pass Jev's System-1 pre-analysis hints directly to Qwen System-2 to guide reasoning
                 layaHintNote = BuildLayaHintNote(analysis);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Laya fast-path encountered an issue; falling back to deep LLM.");
+                _logger.LogWarning(ex, "Jev cognitive pre-processor encountered an issue; falling back to deep LLM.");
             }
+        }
+
+        // If not retrieved via Laya, query available categories for active asset
+        if (availableCategories.Count == 0)
+        {
+            var activeAssetMatch = AssetMatcher.Match(state.UserMessage, assets).Asset
+                ?? (state.PreviousParameters?.AssetId != null ? assets.FirstOrDefault(a => a.AssetId == state.PreviousParameters.AssetId) : null);
+            if (activeAssetMatch != null)
+            {
+                availableCategories = await _telemetryRepo.GetSignalCategoriesByAssetAsync(activeAssetMatch.AssetId, ct);
+            }
+        }
+
+        // Compute pre-grounded state parameters to pass in prompt's STATE: line
+        var promptStateParams = state.PreviousParameters?.Clone();
+        if (analysis?.ActiveAsset != null)
+        {
+            promptStateParams ??= new ExtractedReportParametersDto();
+            promptStateParams.AssetId = analysis.ActiveAsset.AssetId;
+            promptStateParams.AssetName = analysis.ActiveAsset.Name;
+            promptStateParams.Category = analysis.TargetCategory;
+            promptStateParams.TimeRange = analysis.ParsedTimeframe?.TimeRange;
+            promptStateParams.FromDate = analysis.ParsedTimeframe?.FromDate;
+            promptStateParams.ToDate = analysis.ParsedTimeframe?.ToDate;
         }
 
         // ── 2. Deep-Path: Ollama Qwen with Laya hints for reasoning (2-3s) ──
         string systemPrompt = await BuildSystemPromptAsync(assets, ct);
 
-        var (reply, turn) = await AskAsync(state, systemPrompt, assets, note: layaHintNote, ct);
+        var (reply, turn) = await AskAsync(state, systemPrompt, assets, note: layaHintNote, availableCategories, ct, promptStateParams);
 
         // One corrective retry when reply is empty or invented invalid schema parameters.
         string? problem = string.IsNullOrWhiteSpace(reply?.ReplyMessage)
@@ -98,7 +115,7 @@ public class IntentExtractionStep : IChatStep
         {
             _logger.LogInformation("Retrying LLM call once. Problem: {Problem}", problem);
             string retryNote = string.IsNullOrWhiteSpace(layaHintNote) ? problem : $"{layaHintNote} | RETRY_PROBLEM: {problem}";
-            var (retryReply, retryTurn) = await AskAsync(state, systemPrompt, assets, retryNote, ct);
+            var (retryReply, retryTurn) = await AskAsync(state, systemPrompt, assets, retryNote, availableCategories, ct, promptStateParams);
             if (!string.IsNullOrWhiteSpace(retryReply?.ReplyMessage))
             {
                 reply = retryReply;
@@ -108,6 +125,16 @@ public class IntentExtractionStep : IChatStep
 
         if (reply == null || turn == null || string.IsNullOrWhiteSpace(reply.ReplyMessage))
             throw new LlmUnavailableException("The language model did not return a usable reply.");
+
+        // If turn has an asset but availableCategories wasn't queried yet (e.g. user had typo like "primary crushert")
+        if (turn.Parameters.AssetId.HasValue && (availableCategories == null || availableCategories.Count == 0))
+        {
+            availableCategories = await _telemetryRepo.GetSignalCategoriesByAssetAsync(turn.Parameters.AssetId.Value, ct);
+            if (turn.SuggestedAction == SuggestedActions.SelectCategory)
+            {
+                turn = turn with { SuggestedOptions = availableCategories };
+            }
+        }
 
         // Guard against empty telemetry dates from LLM deep-path
         if (turn.Parameters.HasAsset && turn.Parameters.HasTime && turn.Parameters.AssetId.HasValue)
@@ -168,14 +195,26 @@ public class IntentExtractionStep : IChatStep
         var parts = new List<string>();
         if (!string.IsNullOrWhiteSpace(analysis.LayaIntent))
             parts.Add($"intent={analysis.LayaIntent}");
-        if (analysis.MatchedAsset != null)
-            parts.Add($"matched_asset=\"{analysis.MatchedAsset.Name}\" (id={analysis.MatchedAsset.AssetId})");
+        if (analysis.ActiveAsset != null)
+            parts.Add($"asset=\"{analysis.ActiveAsset.Name}\" (id={analysis.ActiveAsset.AssetId})");
+        if (!string.IsNullOrWhiteSpace(analysis.TargetCategory))
+            parts.Add($"category=\"{analysis.TargetCategory}\"");
+        else
+            parts.Add("category=none");
+
+        if (analysis.AvailableCategories.Count > 0)
+            parts.Add($"available_categories=[{string.Join(", ", analysis.AvailableCategories.Select(c => $"\"{c}\""))}]");
+
         if (analysis.ParsedTimeframe is { Found: true })
-            parts.Add($"parsed_timeframe=\"{analysis.ParsedTimeframe.TimeRange ?? $"{analysis.ParsedTimeframe.FromDate}..{analysis.ParsedTimeframe.ToDate}"}\"");
+            parts.Add($"timeframe=\"{analysis.ParsedTimeframe.TimeRange ?? $"{analysis.ParsedTimeframe.FromDate}..{analysis.ParsedTimeframe.ToDate}"}\"");
+
+        if (!string.IsNullOrWhiteSpace(analysis.ActionToTake))
+            parts.Add($"action_to_take=\"{analysis.ActionToTake}\"");
+
         if (analysis.IsRelevant.HasValue)
             parts.Add($"relevance={(analysis.IsRelevant.Value ? "on_topic" : "off_topic")}");
 
-        return parts.Count > 0 ? "LAYA_PREANALYSIS: " + string.Join(" | ", parts) : null;
+        return parts.Count > 0 ? "JEV_COGNITIVE_GUIDE: " + string.Join(" | ", parts) : null;
     }
 
     private async Task<LayaAnalysis> AnalyzeWithLayaAsync(
@@ -185,237 +224,155 @@ public class IntentExtractionStep : IChatStep
     {
         string userMsg = state.UserMessage?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(userMsg))
-            return new LayaAnalysis(null, null, null, null, null);
+            return new LayaAnalysis();
 
         var prevParams = state.PreviousParameters?.Clone() ?? new ExtractedReportParametersDto();
 
-        // ── 1. Deterministic Reset / Clear Request (C# Exact Match) ──
+        // 1. Deterministic Reset / Clear Request (C# Exact Match)
         if (IsResetRequest(userMsg))
         {
-            var emptyParams = new ExtractedReportParametersDto();
-            var fast = new FastTurnResult(
-                Reply: "I have cleared the current report options. Which asset from the catalog would you like to examine?",
-                IsOnTopic: true,
-                IsComplete: false,
-                SuggestedAction: SuggestedActions.SelectAsset,
-                SuggestedOptions: assets.Select(a => a.Name).ToList(),
-                Parameters: emptyParams
-            );
-            return new LayaAnalysis(fast, "reset_options", true, null, null);
+            return new LayaAnalysis(
+                LayaIntent: "reset_options",
+                IsRelevant: true,
+                ActiveAsset: null,
+                TargetCategory: null,
+                ParsedTimeframe: null,
+                AvailableCategories: Array.Empty<string>(),
+                ActionToTake: SuggestedActions.SelectAsset);
         }
 
-        // ── 2. Asset & Timeframe Matching via C# Engine ──
+        // 2. Asset Matching & Asset Change Detection
         var assetMatch = AssetMatcher.Match(userMsg, assets);
         var matchedAsset = assetMatch.Asset;
-        var timeResult = TimeframeParser.Parse(userMsg, allowBareNumber: true, utcNow: DateTime.UtcNow);
-        bool hasConversationalNuance = IsConversationalNuance(userMsg);
+        bool assetChanged = matchedAsset != null && prevParams.HasAsset && matchedAsset.AssetId != prevParams.AssetId;
+        bool assetSelectedInThisTurn = matchedAsset != null;
 
-        // Clean direct match for both asset and timeframe (no ambiguity, no conversational nuance)
-        if (matchedAsset != null && timeResult.Found && !hasConversationalNuance)
+        var activeAsset = matchedAsset ?? (prevParams.HasAsset ? assets.FirstOrDefault(a => a.AssetId == prevParams.AssetId) : null);
+        var availableCategories = activeAsset != null
+            ? await _telemetryRepo.GetSignalCategoriesByAssetAsync(activeAsset.AssetId, ct)
+            : (IReadOnlyList<string>)Array.Empty<string>();
+
+        // 3. Category matching (no regex, direct name / UI chip match)
+        // If an asset was matched in the message, remove asset name to see what remains
+        string remainingQuery = userMsg;
+        if (matchedAsset != null)
         {
-            var targetParams = new ExtractedReportParametersDto
+            int idx = remainingQuery.IndexOf(matchedAsset.Name, StringComparison.OrdinalIgnoreCase);
+            if (idx >= 0)
             {
-                AssetId = matchedAsset.AssetId,
-                AssetName = matchedAsset.Name,
-                TimeRange = timeResult.TimeRange,
-                FromDate = timeResult.FromDate,
-                ToDate = timeResult.ToDate,
-                Mode = "raw"
-            };
+                remainingQuery = remainingQuery.Remove(idx, matchedAsset.Name.Length).Trim();
+            }
+        }
 
-            var period = ResolveTimeframeToUtc(timeResult, targetParams);
-            if (period.HasValue)
+        string? matchedCategory = null;
+        if (!string.IsNullOrWhiteSpace(remainingQuery) && availableCategories.Count > 0)
+        {
+            var catMatch = CategoryMatcher.Match(remainingQuery, availableCategories);
+            if (catMatch.IsMatch)
             {
-                var (hasData, pointCount, minRecorded, maxRecorded) = await _telemetryRepo.CheckDataAvailabilityAsync(
-                    matchedAsset.AssetId, period.Value.From, period.Value.To, ct);
-
-                if (!hasData && !string.IsNullOrWhiteSpace(targetParams.TimeRange) && maxRecorded.HasValue)
+                matchedCategory = catMatch.Category;
+            }
+            else if (_layaClient.IsEnabled && remainingQuery.Length >= 3 && !TimeframeParser.Parse(remainingQuery, allowBareNumber: false).Found)
+            {
+                try
                 {
-                    var anchoredPeriod = ResolveTimeframeToUtc(timeResult, targetParams, maxAnchorTime: maxRecorded.Value);
-                    if (anchoredPeriod.HasValue)
+                    var jevCat = await _layaClient.AskAsync(
+                        remainingQuery,
+                        "Which equipment monitoring category is the user asking about?",
+                        "choice",
+                        choices: availableCategories.ToArray(),
+                        ct);
+
+                    if (jevCat != null && jevCat.Probability >= 0.70 && availableCategories.Contains(jevCat.AsString))
                     {
-                        var (anchoredHasData, _, _, _) = await _telemetryRepo.CheckDataAvailabilityAsync(
-                            matchedAsset.AssetId, anchoredPeriod.Value.From, anchoredPeriod.Value.To, ct);
-                        if (anchoredHasData)
-                        {
-                            hasData = true;
-                            period = anchoredPeriod;
-                        }
+                        matchedCategory = jevCat.AsString;
                     }
                 }
-
-                if (!hasData)
+                catch (Exception ex)
                 {
-                    string rangeMsg = $"{period.Value.From:yyyy-MM-dd} to {period.Value.To:yyyy-MM-dd}";
-                    string availableNotice = (minRecorded.HasValue && maxRecorded.HasValue)
-                        ? $" Recorded telemetry is available between {minRecorded.Value:yyyy-MM-dd} and {maxRecorded.Value:yyyy-MM-dd}."
-                        : "";
-
-                    var emptyParams = new ExtractedReportParametersDto
-                    {
-                        AssetId = matchedAsset.AssetId,
-                        AssetName = matchedAsset.Name,
-                        Mode = "raw"
-                    };
-
-                    var fastNoData = new FastTurnResult(
-                        Reply: $"No telemetry data was found for **{matchedAsset.Name}** between {rangeMsg}.{availableNotice} Please select a date range within the recorded period.",
-                        IsOnTopic: true,
-                        IsComplete: false,
-                        SuggestedAction: SuggestedActions.SelectTimeframe,
-                        SuggestedOptions: DefaultTimeframeOptions,
-                        Parameters: emptyParams
-                    );
-                    return new LayaAnalysis(fastNoData, "configure_report", true, matchedAsset, timeResult);
+                    _logger.LogDebug(ex, "Laya category classification skipped.");
                 }
             }
-
-            string timeDesc = DescribeTimeframe(targetParams);
-            var fast = new FastTurnResult(
-                Reply: $"I have configured the telemetry report for {targetParams.AssetName} covering {timeDesc}. Please click 'Yes, Queue Report' below to generate.",
-                IsOnTopic: true,
-                IsComplete: true,
-                SuggestedAction: SuggestedActions.ConfirmQueue,
-                SuggestedOptions: new[] { "Yes", "Change Options" },
-                Parameters: targetParams
-            );
-            return new LayaAnalysis(fast, "configure_report", true, matchedAsset, timeResult);
         }
 
-        // Clean direct asset match without timeframe (and no conversational questions)
-        if (matchedAsset != null && !timeResult.Found && !hasConversationalNuance && !prevParams.HasTime)
+        string? targetCategory;
+        if (assetChanged || (assetSelectedInThisTurn && matchedCategory == null))
         {
-            var targetParams = new ExtractedReportParametersDto
-            {
-                AssetId = matchedAsset.AssetId,
-                AssetName = matchedAsset.Name,
-                Mode = "raw"
-            };
-
-            var fast = new FastTurnResult(
-                Reply: $"Great! I can help you configure a report for the {targetParams.AssetName}. Could you please specify the timeframe you're interested in?",
-                IsOnTopic: true,
-                IsComplete: false,
-                SuggestedAction: SuggestedActions.SelectTimeframe,
-                SuggestedOptions: DefaultTimeframeOptions,
-                Parameters: targetParams
-            );
-            return new LayaAnalysis(fast, "configure_report", true, matchedAsset, null);
+            targetCategory = matchedCategory;
+        }
+        else
+        {
+            targetCategory = matchedCategory ?? prevParams.Category;
         }
 
-        // Clean direct timeframe answer when asset is already selected (allow updates/changes)
-        if (prevParams.HasAsset && timeResult.Found && !hasConversationalNuance)
+        // 4. Timeframe Parsing
+        var timeResult = TimeframeParser.Parse(userMsg, allowBareNumber: true, utcNow: DateTime.UtcNow);
+        var targetTime = timeResult.Found
+            ? timeResult
+            : (assetChanged || assetSelectedInThisTurn ? null : (prevParams.HasTime ? new TimeframeResult(prevParams.TimeRange, prevParams.FromDate, prevParams.ToDate, null) : null));
+
+        // 5. Intent Classification via Jev (~25ms)
+        string intent = "configure_report";
+        if (matchedCategory == null && !timeResult.Found && !assetSelectedInThisTurn)
         {
-            var testParams = prevParams.Clone();
-            testParams.TimeRange = timeResult.TimeRange;
-            testParams.FromDate = timeResult.FromDate;
-            testParams.ToDate = timeResult.ToDate;
-
-            var period = ResolveTimeframeToUtc(timeResult, testParams);
-            if (period.HasValue && prevParams.AssetId.HasValue)
+            try
             {
-                var (hasData, pointCount, minRecorded, maxRecorded) = await _telemetryRepo.CheckDataAvailabilityAsync(
-                    prevParams.AssetId.Value, period.Value.From, period.Value.To, ct);
-
-                if (!hasData)
+                var intentRes = await _layaClient.AskAsync(
+                    userMsg,
+                    "What is the user trying to do?",
+                    "choice",
+                    choices: new[] { "greeting", "reset_options", "confirm_queue", "configure_report", "general_question" },
+                    ct);
+                if (intentRes?.AsString != null)
                 {
-                    string rangeMsg = $"{period.Value.From:yyyy-MM-dd} to {period.Value.To:yyyy-MM-dd}";
-                    string availableNotice = (minRecorded.HasValue && maxRecorded.HasValue)
-                        ? $" Recorded telemetry is available between {minRecorded.Value:yyyy-MM-dd} and {maxRecorded.Value:yyyy-MM-dd}."
-                        : "";
-
-                    prevParams.TimeRange = null;
-                    prevParams.FromDate = null;
-                    prevParams.ToDate = null;
-
-                    var fastNoData = new FastTurnResult(
-                        Reply: $"No telemetry data was found for **{prevParams.AssetName}** between {rangeMsg}.{availableNotice} Please select a date range within the recorded period.",
-                        IsOnTopic: true,
-                        IsComplete: false,
-                        SuggestedAction: SuggestedActions.SelectTimeframe,
-                        SuggestedOptions: DefaultTimeframeOptions,
-                        Parameters: prevParams
-                    );
-                    return new LayaAnalysis(fastNoData, "configure_report", true, null, timeResult);
+                    intent = intentRes.AsString.ToLowerInvariant();
                 }
             }
-
-            prevParams.TimeRange = timeResult.TimeRange;
-            prevParams.FromDate = timeResult.FromDate;
-            prevParams.ToDate = timeResult.ToDate;
-
-            string timeDesc = DescribeTimeframe(prevParams);
-            var fast = new FastTurnResult(
-                Reply: $"I have configured the telemetry report for {prevParams.AssetName} covering {timeDesc}. Please click 'Yes, Queue Report' below to generate.",
-                IsOnTopic: true,
-                IsComplete: true,
-                SuggestedAction: SuggestedActions.ConfirmQueue,
-                SuggestedOptions: new[] { "Yes", "Change Options" },
-                Parameters: prevParams
-            );
-            return new LayaAnalysis(fast, "configure_report", true, null, timeResult);
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Laya intent classification skipped.");
+            }
         }
 
-        // ── 4. Laya System-1 Fast Classification (for hints) ──
-        var intentRes = await _layaClient.AskAsync(
-            userMsg,
-            "What is the user trying to do?",
-            "choice",
-            choices: new[] { "greeting", "reset_options", "confirm_queue", "configure_report", "general_question" },
-            ct);
-
-        string intent = intentRes?.AsString?.ToLowerInvariant() ?? "general_question";
-
-        // Clean greeting fast-path (only when no asset is selected yet)
-        if (intent == "greeting" && !prevParams.HasAsset && !hasConversationalNuance)
-        {
-            var fast = new FastTurnResult(
-                Reply: "Hello! I am SensorBot, your industrial telemetry and EcoStruxure report assistant. Which machine or equipment would you like to examine?",
-                IsOnTopic: true,
-                IsComplete: false,
-                SuggestedAction: SuggestedActions.SelectAsset,
-                SuggestedOptions: assets.Select(a => a.Name).ToList(),
-                Parameters: prevParams
-            );
-            return new LayaAnalysis(fast, intent, true, null, null);
-        }
-
-        // ── 5. Relevance Guardrail ──
-        // CRITICAL FIX: If an asset is already selected (in-progress workflow), NEVER flag timeframe or follow-up answers as off-topic!
+        // 6. Relevance Guardrail via Jev
         bool isRelevant = true;
-        if (!prevParams.HasAsset && !prevParams.HasTime)
+        if (activeAsset == null && targetCategory == null && (targetTime == null || !targetTime.Found))
         {
-            var topicRes = await _layaClient.AskAsync(
-                userMsg,
-                "Is this message relevant to industrial plant machinery, sensors, telemetry, equipment monitoring, report generation, or asking about available assets/catalog?",
-                "noul",
-                choices: null,
-                ct);
-
-            isRelevant = topicRes?.AsBoolean ?? true;
+            try
+            {
+                var topicRes = await _layaClient.AskAsync(
+                    userMsg,
+                    "Is this message relevant to industrial plant machinery, sensors, telemetry, equipment monitoring, report generation, or asking about available assets/catalog?",
+                    "noul",
+                    choices: null,
+                    ct);
+                isRelevant = topicRes?.AsBoolean ?? true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Laya relevance check skipped.");
+            }
         }
 
-        if (!isRelevant)
-        {
-            _logger.LogInformation("Laya filtered out off-topic message '{UserMsg}' - skipping System-2 LLM execution.", userMsg);
-            var fast = new FastTurnResult(
-                Reply: "I am SensorBot, dedicated exclusively to industrial plant equipment, sensor telemetry, and report generation. Please ask about plant machinery or select an asset from the catalog.",
-                IsOnTopic: false,
-                IsComplete: prevParams.HasAsset && prevParams.HasTime,
-                SuggestedAction: !prevParams.HasAsset ? SuggestedActions.SelectAsset : (prevParams.HasTime ? SuggestedActions.ConfirmQueue : SuggestedActions.SelectTimeframe),
-                SuggestedOptions: !prevParams.HasAsset ? assets.Select(a => a.Name).ToList() : DefaultTimeframeOptions,
-                Parameters: prevParams
-            );
-            return new LayaAnalysis(fast, intent, false, matchedAsset, timeResult);
-        }
+        // 7. Deduce Action To Take
+        string actionToTake =
+            activeAsset == null ? SuggestedActions.SelectAsset :
+            string.IsNullOrWhiteSpace(targetCategory) ? SuggestedActions.SelectCategory :
+            (targetTime == null || !targetTime.Found) ? SuggestedActions.SelectTimeframe :
+            SuggestedActions.ConfirmQueue;
 
-        // ── 6. Pass Insights to Qwen (System-2 Deep Reasoning) ──
-        // For conversational inputs, typos ("3.5 dddaysss"), slang, or multi-intent questions:
-        // Forward Laya's extracted signals to Qwen so Qwen resolves it with 100% precision.
-        _logger.LogInformation("Laya passing request to full LLM reasoning (intent: {Intent}, asset: {Asset}, time: {Time}, isRelevant: {IsRelevant}).",
-            intent, matchedAsset?.Name, timeResult?.TimeRange, isRelevant);
+        _logger.LogInformation(
+            "Jev cognitive pre-processor: intent={Intent}, asset={Asset}, category={Category}, time={Time}, action={Action}, isRelevant={IsRelevant}",
+            intent, activeAsset?.Name, targetCategory, targetTime?.TimeRange, actionToTake, isRelevant);
 
-        return new LayaAnalysis(null, intent, isRelevant, matchedAsset, timeResult);
+        return new LayaAnalysis(
+            LayaIntent: intent,
+            IsRelevant: isRelevant,
+            ActiveAsset: activeAsset,
+            TargetCategory: targetCategory,
+            ParsedTimeframe: targetTime,
+            AvailableCategories: availableCategories,
+            ActionToTake: actionToTake);
     }
 
     private static bool IsResetRequest(string message)
@@ -507,10 +464,12 @@ public class IntentExtractionStep : IChatStep
         string systemPrompt,
         IReadOnlyList<AssetDto> assets,
         string? note,
-        CancellationToken ct)
+        IReadOnlyList<string>? availableCategories,
+        CancellationToken ct,
+        ExtractedReportParametersDto? promptStateParams = null)
     {
         string userPrompt = PromptContextBuilder.Build(
-            state.UserMessage, state.PreviousParameters, state.History, DateTime.UtcNow, note);
+            state.UserMessage, promptStateParams ?? state.PreviousParameters, state.History, DateTime.UtcNow, note);
 
         LlmChatReplyDto? reply;
         try
@@ -528,7 +487,7 @@ public class IntentExtractionStep : IChatStep
         }
 
         if (reply == null) return (null, null);
-        return (reply, ChatResponseSynchronizer.Sync(reply, state.PreviousParameters, assets, state.UserMessage));
+        return (reply, ChatResponseSynchronizer.Sync(reply, state.PreviousParameters, assets, state.UserMessage, availableCategories));
     }
 
     private async Task<string> BuildSystemPromptAsync(IReadOnlyList<AssetDto> assets, CancellationToken ct)
@@ -541,18 +500,15 @@ public class IntentExtractionStep : IChatStep
         return template.Replace("{AssetCatalog}", catalog);
     }
 
-    private sealed record FastTurnResult(
-        string Reply,
-        bool IsOnTopic,
-        bool IsComplete,
-        string SuggestedAction,
-        IReadOnlyList<string> SuggestedOptions,
-        ExtractedReportParametersDto Parameters);
-
     private sealed record LayaAnalysis(
-        FastTurnResult? FastResult,
-        string? LayaIntent,
-        bool? IsRelevant,
-        AssetDto? MatchedAsset,
-        TimeframeResult? ParsedTimeframe);
+        string? LayaIntent = null,
+        bool? IsRelevant = null,
+        AssetDto? ActiveAsset = null,
+        string? TargetCategory = null,
+        TimeframeResult? ParsedTimeframe = null,
+        IReadOnlyList<string>? AvailableCategories = null,
+        string? ActionToTake = null)
+    {
+        public IReadOnlyList<string> AvailableCategories { get; init; } = AvailableCategories ?? Array.Empty<string>();
+    }
 }

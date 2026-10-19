@@ -14,5 +14,6 @@ public interface IReportEvidenceService
         int assetId,
         System.DateTime from,
         System.DateTime to,
+        string? category = null,
         CancellationToken ct = default);
 }

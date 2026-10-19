@@ -61,6 +61,75 @@ const ASSETS = [
   { name: 'Primary Crusher Motor', location: 'Crushing Plant' },
 ];
 
+// Tailored 11 industrial signal categories per asset (10-11 categories / asset)
+const ASSET_CATEGORIES = {
+  'Boiler Feed Pump Motor': {
+    thermal: 'Thermal & Winding',
+    vibration: 'Bearing & Vibration',
+    current: 'Current & Motor Load',
+    voltage: 'Voltage & Grid',
+    power: 'Power & Energy',
+    power_quality: 'Power Quality & Harmonics',
+    insulation: 'Insulation & Dielectric',
+    lubrication: 'Lubrication & Oil System',
+    cooling: 'Coolant & Hydraulic Flow',
+    shaft: 'Shaft & Hydraulic Dynamics',
+    auxiliary: 'Auxiliary Sensors'
+  },
+  'Air Compressor Motor': {
+    thermal: 'Thermal & Winding',
+    vibration: 'Bearing & Vibration',
+    current: 'Current & Motor Load',
+    voltage: 'Voltage & Grid',
+    power: 'Power & Energy',
+    power_quality: 'Power Quality & Harmonics',
+    insulation: 'Insulation & Dielectric',
+    lubrication: 'Compressor Oil System',
+    cooling: 'Pneumatic & Air Flow',
+    shaft: 'Shaft & Compression Dynamics',
+    auxiliary: 'Auxiliary Sensors'
+  },
+  'Main Conveyor Drive Motor': {
+    thermal: 'Thermal & Winding',
+    vibration: 'Bearing & Vibration',
+    current: 'Current & Belt Load',
+    voltage: 'Voltage & Grid',
+    power: 'Power & Energy',
+    power_quality: 'Power Quality & Harmonics',
+    insulation: 'Insulation & Dielectric',
+    lubrication: 'Gearbox Lubrication',
+    cooling: 'Motor Cooling & Ventilation',
+    shaft: 'Drive Pulley & Shaft Dynamics',
+    auxiliary: 'Auxiliary Sensors'
+  },
+  'Cooling Tower Fan Motor': {
+    thermal: 'Thermal & Winding',
+    vibration: 'Bearing & Vibration',
+    current: 'Current & Aerodynamic Load',
+    voltage: 'Voltage & Grid',
+    power: 'Power & Energy',
+    power_quality: 'Power Quality & Harmonics',
+    insulation: 'Insulation & Dielectric',
+    lubrication: 'Lubrication System',
+    cooling: 'Fan Air Flow & Draft',
+    shaft: 'Fan Blade & Shaft Dynamics',
+    auxiliary: 'Auxiliary Sensors'
+  },
+  'Primary Crusher Motor': {
+    thermal: 'Thermal & Winding',
+    vibration: 'Heavy Shock & Vibration',
+    current: 'Crusher Load & Current Spikes',
+    voltage: 'Voltage & Grid',
+    power: 'Power & Energy',
+    power_quality: 'Power Quality & Harmonics',
+    insulation: 'Insulation & Dielectric',
+    lubrication: 'Heavy Duty Lubrication',
+    cooling: 'Enclosure Cooling & Dust Draft',
+    shaft: 'Flywheel & Shaft Dynamics',
+    auxiliary: 'Auxiliary Sensors'
+  }
+};
+
 // ------------------------------------------------------------------ helpers
 function mulberry32(a) {
   return function () {
@@ -76,11 +145,12 @@ const ri = (a, b) => Math.floor(rr(a, b + 1));
 const TWO_PI = Math.PI * 2;
 const DAY_MS = 86400000;
 
-// ------------------------------------------------------------------ signal templates (120 per motor)
+// ------------------------------------------------------------------ signal templates (120 per motor across 11 categories)
 function buildTemplates() {
   const T = [];
-  const add = (name, unit, o = {}) =>
+  const add = (groupKey, name, unit, o = {}) =>
     T.push({
+      groupKey,
       name,
       unit,
       lo: WARN_MIN,
@@ -94,83 +164,83 @@ function buildTemplates() {
 
   const P = ['U', 'V', 'W'], L = ['L1', 'L2', 'L3'], POS = ['DE', 'NDE'], AX = ['H', 'V', 'A'];
 
-  // temperatures (11)
-  P.forEach((p) => add(`Winding_Temp_${p}`, '°C'));
-  POS.forEach((p) => add(`Bearing_Temp_${p}`, '°C'));
-  add('Ambient_Temp', '°C');
-  add('Housing_Temp', '°C');
-  add('Coolant_Temp', '°C');
-  add('Stator_Core_Temp', '°C');
-  add('Rotor_Temp', '°C');
-  add('Cooling_Fan_Temp', '°C');
+  // temperatures (11) -> thermal
+  P.forEach((p) => add('thermal', `Winding_Temp_${p}`, '°C'));
+  POS.forEach((p) => add('thermal', `Bearing_Temp_${p}`, '°C'));
+  add('thermal', 'Ambient_Temp', '°C');
+  add('thermal', 'Housing_Temp', '°C');
+  add('thermal', 'Coolant_Temp', '°C');
+  add('thermal', 'Stator_Core_Temp', '°C');
+  add('thermal', 'Rotor_Temp', '°C');
+  add('thermal', 'Cooling_Fan_Temp', '°C');
 
-  // vibration (18)
-  POS.forEach((p) => AX.forEach((a) => add(`Vib_Vel_${p}_${a}`, 'mm/s')));
-  POS.forEach((p) => AX.forEach((a) => add(`Vib_Acc_${p}_${a}`, 'g')));
-  POS.forEach((p) => AX.forEach((a) => add(`Vib_Env_${p}_${a}`, 'gE')));
+  // vibration (18) -> vibration
+  POS.forEach((p) => AX.forEach((a) => add('vibration', `Vib_Vel_${p}_${a}`, 'mm/s')));
+  POS.forEach((p) => AX.forEach((a) => add('vibration', `Vib_Acc_${p}_${a}`, 'g')));
+  POS.forEach((p) => AX.forEach((a) => add('vibration', `Vib_Env_${p}_${a}`, 'gE')));
 
-  // current (6)
-  L.forEach((l) => add(`Current_${l}`, 'A'));
-  add('Neutral_Current', 'A');
-  add('Current_Imbalance', '%');
-  add('Inrush_Current_Peak', 'A');
+  // current (6) -> current
+  L.forEach((l) => add('current', `Current_${l}`, 'A'));
+  add('current', 'Neutral_Current', 'A');
+  add('current', 'Current_Imbalance', '%');
+  add('current', 'Inrush_Current_Peak', 'A');
 
-  // voltage (7)
-  ['L12', 'L23', 'L31'].forEach((l) => add(`Voltage_${l}`, 'V', { dir: 'both' }));
-  L.forEach((l) => add(`Voltage_${l}N`, 'V', { dir: 'both' }));
-  add('Voltage_Imbalance', '%');
+  // voltage (7) -> voltage
+  ['L12', 'L23', 'L31'].forEach((l) => add('voltage', `Voltage_${l}`, 'V', { dir: 'both' }));
+  L.forEach((l) => add('voltage', `Voltage_${l}N`, 'V', { dir: 'both' }));
+  add('voltage', 'Voltage_Imbalance', '%');
 
-  // power (4)
-  add('Active_Power', 'kW');
-  add('Reactive_Power', 'kVAr');
-  add('Apparent_Power', 'kVA');
-  add('Power_Factor', '', { dir: 'low' });
+  // power (4) -> power
+  add('power', 'Active_Power', 'kW');
+  add('power', 'Reactive_Power', 'kVAr');
+  add('power', 'Apparent_Power', 'kVA');
+  add('power', 'Power_Factor', '', { dir: 'low' });
 
   // speed / load (6)
-  add('Speed_RPM', 'rpm', { dir: 'both' });
-  add('Frequency', 'Hz', { dir: 'both' });
-  add('Slip', '%');
-  add('Torque', 'Nm');
-  add('Load', '%');
-  add('Shaft_Power', 'kW');
+  add('shaft', 'Speed_RPM', 'rpm', { dir: 'both' });
+  add('voltage', 'Frequency', 'Hz', { dir: 'both' });
+  add('current', 'Slip', '%');
+  add('current', 'Torque', 'Nm');
+  add('current', 'Load', '%');
+  add('power', 'Shaft_Power', 'kW');
 
-  // power quality (18)
-  L.forEach((l) => add(`Current_THD_${l}`, '%'));
-  L.forEach((l) => add(`Voltage_THD_${l}`, '%'));
-  [3, 5, 7, 11].forEach((h) => L.forEach((l) => add(`Current_H${h}_${l}`, '%')));
+  // power quality (18) -> power_quality
+  L.forEach((l) => add('power_quality', `Current_THD_${l}`, '%'));
+  L.forEach((l) => add('power_quality', `Voltage_THD_${l}`, '%'));
+  [3, 5, 7, 11].forEach((h) => L.forEach((l) => add('power_quality', `Current_H${h}_${l}`, '%')));
 
-  // insulation / electrical health (6)
-  add('Insulation_Resistance', 'MΩ', { dir: 'low' });
-  P.forEach((p) => add(`Winding_Resistance_${p}`, 'mΩ', { dir: 'both' }));
-  add('Leakage_Current', 'mA');
-  add('Partial_Discharge', 'pC');
+  // insulation / electrical health (6) -> insulation
+  add('insulation', 'Insulation_Resistance', 'MΩ', { dir: 'low' });
+  P.forEach((p) => add('insulation', `Winding_Resistance_${p}`, 'mΩ', { dir: 'both' }));
+  add('insulation', 'Leakage_Current', 'mA');
+  add('insulation', 'Partial_Discharge', 'pC');
 
-  // lubrication (4)
-  add('Oil_Pressure', 'bar', { dir: 'both' });
-  add('Oil_Temp', '°C');
-  add('Oil_Level', '%', { dir: 'low' });
-  add('Oil_Flow', 'L/min', { dir: 'both' });
+  // lubrication (4) -> lubrication
+  add('lubrication', 'Oil_Pressure', 'bar', { dir: 'both' });
+  add('lubrication', 'Oil_Temp', '°C');
+  add('lubrication', 'Oil_Level', '%', { dir: 'low' });
+  add('lubrication', 'Oil_Flow', 'L/min', { dir: 'both' });
 
-  // cooling (4)
-  add('Fan_Speed', 'rpm', { dir: 'both' });
-  add('Air_Flow', 'm3/h', { dir: 'both' });
-  add('Coolant_Flow', 'L/min', { dir: 'both' });
-  add('Coolant_Pressure', 'bar', { dir: 'both' });
+  // cooling (4) -> cooling
+  add('cooling', 'Fan_Speed', 'rpm', { dir: 'both' });
+  add('cooling', 'Air_Flow', 'm3/h', { dir: 'both' });
+  add('cooling', 'Coolant_Flow', 'L/min', { dir: 'both' });
+  add('cooling', 'Coolant_Pressure', 'bar', { dir: 'both' });
 
-  // shaft (4)
-  add('Shaft_Disp_X', 'um');
-  add('Shaft_Disp_Y', 'um');
-  add('Axial_Position', 'um', { dir: 'both' });
-  add('Shaft_Eccentricity', 'um');
+  // shaft (4) -> shaft
+  add('shaft', 'Shaft_Disp_X', 'um');
+  add('shaft', 'Shaft_Disp_Y', 'um');
+  add('shaft', 'Axial_Position', 'um', { dir: 'both' });
+  add('shaft', 'Shaft_Eccentricity', 'um');
 
-  // embedded RTDs (6)
-  for (let n = 1; n <= 6; n++) add(`Winding_RTD_${n}`, '°C');
+  // embedded RTDs (6) -> thermal
+  for (let n = 1; n <= 6; n++) add('thermal', `Winding_RTD_${n}`, '°C');
 
-  // pad up to 120 with auxiliary channels
+  // pad up to 120 with auxiliary channels -> auxiliary
   for (let n = 1; T.length < CFG.signalsPerAsset; n++) {
     const id = String(n).padStart(2, '0');
-    add(`Aux_Temp_${id}`, '°C');
-    if (T.length < CFG.signalsPerAsset) add(`Aux_Vib_${id}`, 'mm/s');
+    add('auxiliary', `Aux_Temp_${id}`, '°C');
+    if (T.length < CFG.signalsPerAsset) add('auxiliary', `Aux_Vib_${id}`, 'mm/s');
   }
   return T.slice(0, CFG.signalsPerAsset);
 }
@@ -189,12 +259,14 @@ const minToSamples = (m) => Math.max(2, Math.ceil(m / CFG.sampleMinutes));
 // ------------------------------------------------------------------ build signal instances
 const TPL = buildTemplates();
 const sigs = [];
-ASSETS.forEach((_, ai) => {
+ASSETS.forEach((asset, ai) => {
+  const catMap = ASSET_CATEGORIES[asset.name] || {};
   TPL.forEach((t) => {
+    const category = catMap[t.groupKey] || 'General';
     const R = t.hi - t.lo; // 10.0
     const base = t.lo + rr(t.frac[0], t.frac[1]) * R; // around 4.0 to 6.0
     sigs.push({
-      ai, t, R, base,
+      ai, t, category, R, base,
       amp: rr(0.4, 0.9),  // gentle daily swing
       sd: rr(0.08, 0.18), // noise
       phase: rr(0, TWO_PI),
@@ -419,16 +491,23 @@ async function main() {
       await client.query('TRUNCATE alerts, events, signal_data, signals, assets RESTART IDENTITY CASCADE');
     }
 
+    // Ensure signals category column and index exist
+    await client.query(`
+      ALTER TABLE signals ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'General';
+      CREATE INDEX IF NOT EXISTS signals_asset_id_category_idx ON signals (asset_id, category);
+    `);
+
     // assets
     const assetRows = await insertMany(client, 'assets', ['name', 'asset_type', 'location'],
       ASSETS.map((a) => [a.name, 'Motor', a.location]), 500, 'RETURNING asset_id, name');
     const assetId = Object.fromEntries(assetRows.map((r) => [r.name, r.asset_id]));
 
-    // signals (120 per asset with dual thresholds: warning [0..10], critical [-2..12])
+    // signals (120 per asset with dual thresholds: warning [0..10], critical [-2..12], segregated into 11 categories)
     const sigRows = await insertMany(client, 'signals',
-      ['asset_id', 'name', 'unit', 'min_value', 'max_value', 'critical_min_value', 'critical_max_value'],
+      ['asset_id', 'category', 'name', 'unit', 'min_value', 'max_value', 'critical_min_value', 'critical_max_value'],
       sigs.map((g) => [
         assetId[ASSETS[g.ai].name],
+        g.category,
         g.t.name,
         g.t.unit,
         g.t.lo,
@@ -436,14 +515,14 @@ async function main() {
         g.t.critLo,
         g.t.critHi
       ]),
-      500, 'RETURNING signal_id, asset_id, name');
+      500, 'RETURNING signal_id, asset_id, name, category');
     const sigKey = new Map(sigRows.map((r) => [`${r.asset_id}:${r.name}`, r.signal_id]));
     sigs.forEach((g, s) => {
       g.assetId = assetId[ASSETS[g.ai].name];
       g.signalId = sigKey.get(`${g.assetId}:${g.t.name}`);
       ids[s] = g.signalId;
     });
-    console.log(`Inserted ${assetRows.length} assets, ${sigRows.length} signals.`);
+    console.log(`Inserted ${assetRows.length} assets, ${sigRows.length} signals across 11 categories per asset.`);
 
     // raw time-series via COPY
     console.log('\nLoading signal_data (COPY)...');

@@ -9,6 +9,7 @@ public class ReportJob
     public Guid Id { get; set; } = Guid.NewGuid();
     public int AssetId { get; set; }
     public string AssetName { get; set; } = string.Empty;
+    public string? Category { get; set; }
     public List<int>? SignalIds { get; set; }
     public DateTime? From { get; set; }
     public DateTime? To { get; set; }

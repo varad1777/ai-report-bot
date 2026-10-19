@@ -16,6 +16,6 @@ public class PdfGenerationResult
 
 public interface IPdfReportService
 {
-    Task<byte[]> GeneratePdfAsync(int assetId, DateTime from, DateTime to, Func<int, string, Task>? onProgress = null, CancellationToken ct = default);
-    Task<PdfGenerationResult> GenerateReportResultAsync(int assetId, DateTime from, DateTime to, Func<int, string, Task>? onProgress = null, CancellationToken ct = default);
+    Task<byte[]> GeneratePdfAsync(int assetId, DateTime from, DateTime to, string? category = null, Func<int, string, Task>? onProgress = null, CancellationToken ct = default);
+    Task<PdfGenerationResult> GenerateReportResultAsync(int assetId, DateTime from, DateTime to, string? category = null, Func<int, string, Task>? onProgress = null, CancellationToken ct = default);
 }

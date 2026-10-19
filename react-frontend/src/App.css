@@ -472,6 +472,19 @@
   color: #166534;
 }
 
+.interactive-chip.category-chip {
+  background: #f5f3ff;
+  border-color: #ddd6fe;
+  color: #6d28d9;
+}
+
+.interactive-chip.category-chip:hover:not(:disabled) {
+  background: #ede9fe;
+  border-color: #8b5cf6;
+  color: #5b21b6;
+  transform: translateY(-1px);
+}
+
 .interactive-chip.time-chip {
   background: #f8fafc;
 }
@@ -610,6 +623,16 @@
 
 .param-chip strong {
   color: var(--text-main);
+}
+
+.param-chip.category-badge {
+  background: #f5f3ff;
+  border-color: #ddd6fe;
+  color: #6d28d9;
+}
+
+.param-chip.category-badge strong {
+  color: #5b21b6;
 }
 
 /* Chat Confirmation Actions (Yes / Change) */

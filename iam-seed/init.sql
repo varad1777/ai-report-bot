@@ -13,6 +13,7 @@ CREATE TABLE assets (
 CREATE TABLE signals (
   signal_id           SERIAL PRIMARY KEY,
   asset_id            INT NOT NULL REFERENCES assets(asset_id),
+  category            TEXT NOT NULL DEFAULT 'General',  -- e.g. Thermal & Winding, Bearing & Vibration...
   name                TEXT NOT NULL,                  -- e.g. Winding_Temp_U
   unit                TEXT,                           -- °C, mm/s, A, V, rpm...
   min_value           DOUBLE PRECISION NOT NULL DEFAULT 0,       -- Warning Min (0)
@@ -22,6 +23,7 @@ CREATE TABLE signals (
   UNIQUE (asset_id, name)
 );
 CREATE INDEX ON signals (asset_id);
+CREATE INDEX ON signals (asset_id, category);
 
 CREATE TABLE events (
   event_id     BIGSERIAL PRIMARY KEY,

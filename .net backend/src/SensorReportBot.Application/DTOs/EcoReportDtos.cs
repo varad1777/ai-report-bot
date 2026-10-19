@@ -176,6 +176,7 @@ public class AlertEvidenceDto
 public class ReportEvidenceDto
 {
     public AssetDto                     Asset             { get; set; } = new();
+    public string?                      SelectedCategory  { get; set; }
     public List<AssetDto>               AllAssets         { get; set; } = new();
     public DateTime                     From              { get; set; }
     public DateTime                     To                { get; set; }

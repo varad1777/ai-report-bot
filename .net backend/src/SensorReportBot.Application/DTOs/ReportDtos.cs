@@ -16,6 +16,7 @@ public class SignalDto
     public int SignalId { get; set; }
     public int AssetId { get; set; }
     public string Name { get; set; } = string.Empty;
+    public string? Category { get; set; }
     public string? Unit { get; set; }
     public double MinValue { get; set; }
     public double MaxValue { get; set; }
@@ -26,6 +27,7 @@ public class SignalDto
 public class ReportRequestDto
 {
     public int AssetId { get; set; }
+    public string? Category { get; set; }
     public List<int>? SignalIds { get; set; }
     public DateTime? From { get; set; }
     public DateTime? To { get; set; }

@@ -30,9 +30,12 @@ public class ExtractedReportParametersDto
     public string? ToDate { get; set; }
 
     public string? Mode { get; set; }
+    public string? Category { get; set; }
 
     [JsonIgnore]
     public bool HasAsset => AssetId is > 0;
+    [JsonIgnore]
+    public bool HasCategory => !string.IsNullOrWhiteSpace(Category);
     [JsonIgnore]
     public bool HasTime => !string.IsNullOrWhiteSpace(TimeRange) || !string.IsNullOrWhiteSpace(FromDate);
 
@@ -40,6 +43,7 @@ public class ExtractedReportParametersDto
     {
         AssetId = AssetId,
         AssetName = AssetName,
+        Category = Category,
         SignalIds = SignalIds == null ? null : new List<int>(SignalIds),
         TimeRange = TimeRange,
         FromDate = FromDate,
@@ -52,6 +56,7 @@ public class ExtractedReportParametersDto
 public static class SuggestedActions
 {
     public const string SelectAsset = "select_asset";
+    public const string SelectCategory = "select_category";
     public const string SelectTimeframe = "select_timeframe";
     public const string ConfirmQueue = "confirm_queue";
     public const string None = "none";

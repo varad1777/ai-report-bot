@@ -34,6 +34,7 @@ public static class PromptContextBuilder
 
         sb.Append("NOW: ").AppendLine(utcNow.ToString("yyyy-MM-dd'T'HH:mm'Z'", CultureInfo.InvariantCulture));
         sb.Append("STATE: ").AppendLine(DescribeState(state));
+        sb.AppendLine(DetermineStageAndGoal(state));
 
         if (recentMessages is { Count: > 0 })
         {
@@ -59,16 +60,32 @@ public static class PromptContextBuilder
 
     private const int LoadLimit = 4;
 
+    public static string DetermineStageAndGoal(ExtractedReportParametersDto? p)
+    {
+        if (p == null || !p.HasAsset)
+            return "STAGE: SELECT_ASSET\nTASK: Ask the user which machine or equipment from CATALOG they would like to examine.";
+
+        if (!p.HasCategory)
+            return $"STAGE: SELECT_CATEGORY\nTASK: Acknowledge that \"{p.AssetName}\" is selected. Ask the user which signal category they would like to examine for this machine.";
+
+        if (!p.HasTime)
+            return $"STAGE: SELECT_TIMEFRAME\nTASK: Acknowledge that category \"{p.Category}\" is configured for \"{p.AssetName}\". Ask the user which timeframe they would like to analyze (e.g. 24h, 5d, 2w, or dates).";
+
+        string timeDesc = !string.IsNullOrWhiteSpace(p.TimeRange) ? p.TimeRange : $"{p.FromDate} to {p.ToDate}";
+        return $"STAGE: CONFIRM_QUEUE\nTASK: State that the report for \"{p.AssetName}\" covering \"{p.Category}\" for {timeDesc} is configured. Ask the user to click 'Yes, Queue Report' below to generate.";
+    }
+
     public static string DescribeState(ExtractedReportParametersDto? p)
     {
-        if (p == null || (!p.HasAsset && !p.HasTime)) return "asset=none time=none";
+        if (p == null || (!p.HasAsset && !p.HasTime && !p.HasCategory)) return "asset=none category=none time=none";
 
         string asset = p.HasAsset ? $"asset={p.AssetId} \"{p.AssetName}\"" : "asset=none";
+        string category = p.HasCategory ? $"category=\"{p.Category}\"" : "category=none";
         string time =
             !string.IsNullOrWhiteSpace(p.FromDate) ? $"time={p.FromDate}..{(string.IsNullOrWhiteSpace(p.ToDate) ? "now" : p.ToDate)}" :
             !string.IsNullOrWhiteSpace(p.TimeRange) ? $"time={p.TimeRange}" :
             "time=none";
-        return $"{asset} {time}";
+        return $"{asset} {category} {time}";
     }
 
     private static List<ChatMessageEntity> FilterOnTopicHistory(IReadOnlyList<ChatMessageEntity> messages)

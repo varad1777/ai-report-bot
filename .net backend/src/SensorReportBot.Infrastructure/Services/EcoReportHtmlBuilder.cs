@@ -51,9 +51,9 @@ public class EcoReportHtmlBuilder
         var e = model.Evidence;
         var sb = new StringBuilder(180_000);
 
-        // Take 10 signals by default (prioritizing those with alerts/excursions)
+        // If a category was chosen, render all signals in that category. Otherwise take top 10 signals.
         var signals = (e.Signals != null && e.Signals.Count > 0)
-            ? e.Signals.Take(10).ToList()
+            ? (!string.IsNullOrWhiteSpace(e.SelectedCategory) ? e.Signals.ToList() : e.Signals.Take(10).ToList())
             : new List<SignalEvidenceDto>();
 
         // 2 signals per monitoring page
@@ -359,6 +359,7 @@ public class EcoReportHtmlBuilder
             "    </svg>\n" +
             $"    <div class=\"cover-plant\">{H(plantName)}</div>\n" +
             "    <div class=\"cover-report-text\">Report</div>\n" +
+            (!string.IsNullOrWhiteSpace(e.SelectedCategory) ? $"    <div style=\"font-size: 13pt; font-weight: 600; color: #111827; margin-bottom: 8px;\">Category: {H(e.SelectedCategory)}</div>\n" : "") +
             $"    <div class=\"cover-analysis-period\"><strong>Analysis Period:</strong> {analysisPeriod}</div>\n" +
             "  </div>\n" +
             BuildPageFooter(m.GeneratedAt, pageNum) +
@@ -389,6 +390,10 @@ public class EcoReportHtmlBuilder
         sb.Append("  <div class=\"asset-meta-list\" style=\"margin-bottom:12px;\">\n");
         sb.Append($"    <div><strong>Site:</strong> {H(siteName)}</div>\n");
         sb.Append($"    <div><strong>Asset:</strong> {H(assetName)}</div>\n");
+        if (!string.IsNullOrWhiteSpace(e.SelectedCategory))
+        {
+            sb.Append($"    <div><strong>Category:</strong> {H(e.SelectedCategory)}</div>\n");
+        }
         sb.Append("    <div><strong>Monitoring Data:</strong> Health Score</div>\n");
         sb.Append("  </div>\n");
 
@@ -583,6 +588,10 @@ public class EcoReportHtmlBuilder
         sb.Append("  <div class=\"asset-meta-list\">\n");
         sb.Append($"    <div><strong>Site:</strong> {H(siteName)}</div>\n");
         sb.Append($"    <div><strong>Asset:</strong> {H(assetName)}</div>\n");
+        if (!string.IsNullOrWhiteSpace(e.SelectedCategory))
+        {
+            sb.Append($"    <div><strong>Category:</strong> {H(e.SelectedCategory)}</div>\n");
+        }
         sb.Append("    <div><strong>Monitoring Data:</strong> Health Score</div>\n");
         sb.Append("  </div>\n");
 

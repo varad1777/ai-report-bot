@@ -36,7 +36,8 @@ public static class ChatResponseSynchronizer
         LlmChatReplyDto raw,
         ExtractedReportParametersDto? previous,
         IReadOnlyList<AssetDto> assets,
-        string? userMessage = null)
+        string? userMessage = null,
+        IReadOnlyList<string>? availableCategories = null)
     {
         var prev = previous?.Clone() ?? new ExtractedReportParametersDto();
         string? llmAction = NormalizeAction(raw.SuggestedAction);
@@ -44,7 +45,7 @@ public static class ChatResponseSynchronizer
         // Unrelated chat never touches the saved configuration.
         if (!raw.IsOnTopic)
         {
-            return new SyncedTurn(false, prev.HasAsset && prev.HasTime, SuggestedActions.None,
+            return new SyncedTurn(false, prev.HasAsset && prev.HasCategory && prev.HasTime, SuggestedActions.None,
                 Array.Empty<string>(), prev, null);
         }
 
@@ -60,16 +61,60 @@ public static class ChatResponseSynchronizer
         if (llmAction == SuggestedActions.SelectAsset && asset != null && asset.AssetId == prev.AssetId)
             asset = null;
 
+        bool assetChanged = asset != null && prev.HasAsset && asset.AssetId != prev.AssetId;
+        bool assetSelectedInThisTurn = !string.IsNullOrWhiteSpace(userMessage) && AssetMatcher.Match(userMessage, assets).IsMatch;
+
+        // ---- Category (must be verified against active asset's categories) ------------------
+        string? category = null;
+        if (asset != null && availableCategories != null && availableCategories.Count > 0)
+        {
+            var userCatMatch = !string.IsNullOrWhiteSpace(userMessage)
+                ? CategoryMatcher.Match(userMessage, availableCategories)
+                : CategoryMatchResult.None;
+
+            string? candidateCat;
+            if (assetChanged || (assetSelectedInThisTurn && !userCatMatch.IsMatch))
+            {
+                // When an asset is newly selected or changed without a category in the message, reset category
+                candidateCat = userCatMatch.IsMatch ? userCatMatch.Category : null;
+            }
+            else
+            {
+                candidateCat = userCatMatch.IsMatch ? userCatMatch.Category : (p.Category ?? prev.Category);
+            }
+
+            if (!string.IsNullOrWhiteSpace(candidateCat))
+            {
+                var match = CategoryMatcher.Match(candidateCat, availableCategories);
+                if (match.IsMatch)
+                {
+                    category = match.Category;
+                }
+            }
+        }
+        else if (asset != null && !assetChanged && !assetSelectedInThisTurn)
+        {
+            category = prev.Category;
+        }
+
         // ---- Timeframe ---------------------------------------------------------------------
         var (timeRange, fromDate, toDate, timeProblem) = ResolveTime(p, userMessage);
         problem ??= timeProblem;
 
         bool timeUnchanged = timeRange == prev.TimeRange && fromDate == prev.FromDate && toDate == prev.ToDate;
-        if ((llmAction == SuggestedActions.SelectTimeframe || llmAction == SuggestedActions.SelectAsset || !raw.IsComplete) && !prev.HasTime)
+        var userTimeParsed = !string.IsNullOrWhiteSpace(userMessage)
+            ? TimeframeParser.Parse(userMessage, allowBareNumber: true, utcNow: DateTime.UtcNow)
+            : TimeframeResult.None;
+
+        if (assetChanged || (assetSelectedInThisTurn && !userTimeParsed.Found))
         {
             timeRange = fromDate = toDate = null;
         }
-        else if (llmAction == SuggestedActions.SelectTimeframe && timeUnchanged)
+        else if ((llmAction == SuggestedActions.SelectTimeframe || llmAction == SuggestedActions.SelectAsset || llmAction == SuggestedActions.SelectCategory || !raw.IsComplete) && !prev.HasTime && !userTimeParsed.Found)
+        {
+            timeRange = fromDate = toDate = null;
+        }
+        else if (llmAction == SuggestedActions.SelectTimeframe && timeUnchanged && !userTimeParsed.Found)
         {
             timeRange = fromDate = toDate = null;
         }
@@ -79,6 +124,7 @@ public static class ChatResponseSynchronizer
         {
             AssetId = asset?.AssetId,
             AssetName = asset?.Name,
+            Category = category,
             TimeRange = timeRange,
             FromDate = fromDate,
             ToDate = toDate,
@@ -88,21 +134,21 @@ public static class ChatResponseSynchronizer
                 : null
         };
 
-        bool complete = result.HasAsset && result.HasTime;
-        bool unchanged = result.AssetId == prev.AssetId && SameTime(result, prev);
+        bool complete = result.HasAsset && result.HasCategory && result.HasTime;
+        bool unchanged = result.AssetId == prev.AssetId && result.Category == prev.Category && SameTime(result, prev);
 
         // ---- Action + options --------------------------------------------------------------
         string action =
             !result.HasAsset ? SuggestedActions.SelectAsset :
+            !result.HasCategory ? SuggestedActions.SelectCategory :
             !result.HasTime ? SuggestedActions.SelectTimeframe :
-            // Fully configured: ask for confirmation, unless this turn was just a side question
-            // the model deliberately answered with "none" and nothing in the config changed.
             (llmAction == SuggestedActions.None && unchanged) ? SuggestedActions.None :
             SuggestedActions.ConfirmQueue;
 
         IReadOnlyList<string> options = action switch
         {
             SuggestedActions.SelectAsset => assets.Select(a => a.Name).ToList(),
+            SuggestedActions.SelectCategory => availableCategories ?? Array.Empty<string>(),
             SuggestedActions.SelectTimeframe => TimeframePresets,
             SuggestedActions.ConfirmQueue => ConfirmOptions,
             _ => Array.Empty<string>()
@@ -117,7 +163,7 @@ public static class ChatResponseSynchronizer
     private static string? NormalizeAction(string? action)
     {
         string? a = action?.Trim().ToLowerInvariant();
-        return a is SuggestedActions.SelectAsset or SuggestedActions.SelectTimeframe
+        return a is SuggestedActions.SelectAsset or SuggestedActions.SelectCategory or SuggestedActions.SelectTimeframe
             or SuggestedActions.ConfirmQueue or SuggestedActions.None
             ? a
             : null;

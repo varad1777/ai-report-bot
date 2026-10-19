@@ -36,6 +36,13 @@ public class ReportsController : ControllerBase
         return Ok(signals);
     }
 
+    [HttpGet("assets/{assetId:int}/categories")]
+    public async Task<IActionResult> GetCategories(int assetId, CancellationToken ct)
+    {
+        var categories = await _telemetryRepository.GetSignalCategoriesByAssetAsync(assetId, ct);
+        return Ok(categories);
+    }
+
     [HttpPost("preview")]
     public async Task<IActionResult> GeneratePreview([FromBody] ReportRequestDto request, CancellationToken ct)
     {

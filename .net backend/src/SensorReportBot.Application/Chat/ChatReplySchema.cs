@@ -31,17 +31,18 @@ public static class ChatReplySchema
             ["suggestedAction"] = new Dictionary<string, object>
             {
                 ["type"] = "string",
-                ["enum"] = new[] { "select_asset", "select_timeframe", "confirm_queue", "none" }
+                ["enum"] = new[] { "select_asset", "select_category", "select_timeframe", "confirm_queue", "none" }
             },
             ["extractedParameters"] = new Dictionary<string, object>
             {
                 ["type"] = "object",
                 ["additionalProperties"] = false,
-                ["required"] = new[] { "assetId", "assetName", "signalIds", "timeRange", "fromDate", "toDate", "mode" },
+                ["required"] = new[] { "assetId", "assetName", "category", "signalIds", "timeRange", "fromDate", "toDate", "mode" },
                 ["properties"] = new Dictionary<string, object>
                 {
                     ["assetId"] = NullableOf("integer"),
                     ["assetName"] = NullableOf("string"),
+                    ["category"] = NullableOf("string"),
                     ["signalIds"] = new Dictionary<string, object>
                     {
                         ["anyOf"] = new object[]

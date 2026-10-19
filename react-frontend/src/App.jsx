@@ -38,6 +38,7 @@ function App() {
   // Asset state (used for chat dropdowns and name resolution)
   const [assets, setAssets] = useState([]);
   const [selectedAssetId, setSelectedAssetId] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('');
   const [timeRange, setTimeRange] = useState('7d');
   const [includeFullRawData, setIncludeFullRawData] = useState(false);
 
@@ -103,6 +104,9 @@ function App() {
           if (lastWithParams?.extractedParameters) {
             if (lastWithParams.extractedParameters.assetId) {
               setSelectedAssetId(lastWithParams.extractedParameters.assetId.toString());
+            }
+            if (lastWithParams.extractedParameters.category) {
+              setSelectedCategory(lastWithParams.extractedParameters.category);
             }
             if (lastWithParams.extractedParameters.timeRange) {
               setTimeRange(lastWithParams.extractedParameters.timeRange);
@@ -177,6 +181,9 @@ function App() {
         if (res.extractedParameters.assetId) {
           setSelectedAssetId(res.extractedParameters.assetId.toString());
         }
+        if (res.extractedParameters.category !== undefined) {
+          setSelectedCategory(res.extractedParameters.category || '');
+        }
         if (res.extractedParameters.timeRange) {
           setTimeRange(res.extractedParameters.timeRange);
         }
@@ -224,6 +231,9 @@ function App() {
           if (lastWithParams.extractedParameters.assetId) {
             setSelectedAssetId(lastWithParams.extractedParameters.assetId.toString());
           }
+          if (lastWithParams.extractedParameters.category !== undefined) {
+            setSelectedCategory(lastWithParams.extractedParameters.category || '');
+          }
           if (lastWithParams.extractedParameters.timeRange) {
             setTimeRange(lastWithParams.extractedParameters.timeRange);
           }
@@ -233,6 +243,7 @@ function App() {
 
     connection.on("ReceiveHistoryCleared", (clearedSessionId) => {
       setMessages([]);
+      setSelectedCategory('');
       setChatQueuedJobs({});
       if (clearedSessionId) {
         localStorage.removeItem(`sensor_bot_messages_${clearedSessionId}`);
@@ -379,7 +390,7 @@ function App() {
   /**
    * Core queue function triggered by chat bot interaction
    */
-  const _queuePdfJob = async (assetId, rangeStr, fromDateIso = null, toDateIso = null) => {
+  const _queuePdfJob = async (assetId, rangeStr, fromDateIso = null, toDateIso = null, category = null) => {
     if (!assetId) return null;
 
     setIsQueueing(true);
@@ -394,12 +405,14 @@ function App() {
     }
 
     try {
+      const chosenCategory = category || selectedCategory || null;
       const res = await fetch(`${API_BASE_URL}/reports/queue`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           assetId,
-          signalIds: null, // default to all signals for asset
+          signalIds: null, // default to all signals for asset / category
+          category: chosenCategory,
           from,
           to,
           includeEvents: true,
@@ -423,6 +436,7 @@ function App() {
           id: data.jobId,
           assetId,
           assetName: (assets.find(a => a.assetId === assetId)?.name) || `Asset-${assetId}`,
+          category: chosenCategory,
           sessionId,
           status: 'Queued',
           statusText: 'Queued',
@@ -518,6 +532,7 @@ function App() {
 
   const handleClearChat = async () => {
     setMessages([]);
+    setSelectedCategory('');
     setChatQueuedJobs({});
     if (sessionId) {
       localStorage.removeItem(`sensor_bot_messages_${sessionId}`);
@@ -682,6 +697,29 @@ function App() {
                           </div>
                         )}
 
+                        {/* Interactive Signal Category Options Shelf */}
+                        {m.sender === 'assistant' && m.isOnTopic && !m.isComplete && m.suggestedAction === 'select_category' && m.suggestedOptions && m.suggestedOptions.length > 0 && (
+                          <div className="chat-interactive-shelf">
+                            <div className="shelf-label">
+                              <Sparkles size={12} />
+                              <span>Select Signal Category for this Asset:</span>
+                            </div>
+                            <div className="shelf-chips">
+                              {m.suggestedOptions.map((catName, idx) => (
+                                <button
+                                  key={idx}
+                                  type="button"
+                                  className="interactive-chip category-chip"
+                                  onClick={() => handleSendChat(catName)}
+                                  disabled={isChatLoading}
+                                >
+                                  <Zap size={12} /> {catName}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
                         {/* Interactive Timeframe Options & Calendar Shelf */}
                         {m.sender === 'assistant' && m.isOnTopic && !m.isComplete && m.suggestedAction === 'select_timeframe' && (
                           <div className="chat-interactive-shelf">
@@ -777,13 +815,15 @@ function App() {
                         )}
 
                         {/* Extracted Intent Parameters Card & Live Confirmation Flow */}
-                        {m.sender === 'assistant' && m.extractedParameters && (m.extractedParameters.assetName || m.extractedParameters.timeRange || m.extractedParameters.fromDate) && (
+                        {m.sender === 'assistant' && m.extractedParameters && (m.extractedParameters.assetName || m.extractedParameters.category || m.extractedParameters.timeRange || m.extractedParameters.fromDate) && (
                           <div className="extracted-params-card">
                             <div className="params-header">
                               <Zap size={13} className="text-amber" />
                               <span>Report Configuration</span>
                               {m.isComplete ? (
                                 <span className="complete-tag"><CheckCircle2 size={10} /> READY</span>
+                              ) : !m.extractedParameters.category ? (
+                                <span className="incomplete-tag">SELECTING CATEGORY</span>
                               ) : (
                                 <span className="incomplete-tag">SELECTING PERIOD</span>
                               )}
@@ -791,6 +831,9 @@ function App() {
                             <div className="params-body">
                               {m.extractedParameters.assetName && (
                                 <div className="param-chip">Asset: <strong>{m.extractedParameters.assetName}</strong></div>
+                              )}
+                              {m.extractedParameters.category && (
+                                <div className="param-chip category-badge">Category: <strong>{m.extractedParameters.category}</strong></div>
                               )}
                               {m.extractedParameters.timeRange && (
                                 <div className="param-chip">Time: <strong>{m.extractedParameters.timeRange}</strong></div>
@@ -816,17 +859,20 @@ function App() {
                                   disabled={isQueueing}
                                   onClick={async () => {
                                     const assetId = m.extractedParameters.assetId;
+                                    const category = m.extractedParameters.category;
                                     const rangeStr = m.extractedParameters.timeRange;
                                     const fromDate = m.extractedParameters.fromDate;
                                     const toDate = m.extractedParameters.toDate;
                                     if (assetId) setSelectedAssetId(assetId.toString());
+                                    if (category) setSelectedCategory(category);
                                     if (rangeStr) setTimeRange(rangeStr);
 
                                     const jobRes = await _queuePdfJob(
                                       assetId || parseInt(selectedAssetId),
                                       rangeStr || timeRange,
                                       fromDate || null,
-                                      toDate || null
+                                      toDate || null,
+                                      category || selectedCategory || null
                                     );
 
                                     if (jobRes && jobRes.jobId) {
@@ -834,7 +880,8 @@ function App() {
                                         ...prev,
                                         [m.id]: {
                                           jobId: jobRes.jobId,
-                                          assetName: m.extractedParameters.assetName || `Asset-${assetId}`
+                                          assetName: m.extractedParameters.assetName || `Asset-${assetId}`,
+                                          category: category || selectedCategory || null
                                         }
                                       }));
                                     }
@@ -1155,6 +1202,11 @@ function App() {
                           <div className="queue-card-top">
                             <div className="queue-card-title-group">
                               <h4 className="queue-card-asset">{job.assetName}</h4>
+                              {job.category && (
+                                <span className="param-chip category-badge" style={{ fontSize: '10px', padding: '1px 6px', marginLeft: '6px' }}>
+                                  {job.category}
+                                </span>
+                              )}
                               <span className="queue-card-id">ID: {(job.jobId || job.id || '').toString().slice(0, 8)}</span>
                             </div>
 

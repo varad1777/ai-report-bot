@@ -45,10 +45,11 @@ public class EcoReportService : IPdfReportService
         int assetId, 
         DateTime from, 
         DateTime to, 
+        string? category = null,
         Func<int, string, Task>? onProgress = null, 
         CancellationToken ct = default)
     {
-        var result = await GenerateReportResultAsync(assetId, from, to, onProgress, ct);
+        var result = await GenerateReportResultAsync(assetId, from, to, category, onProgress, ct);
         return result.PdfBytes;
     }
 
@@ -56,11 +57,12 @@ public class EcoReportService : IPdfReportService
         int assetId, 
         DateTime from, 
         DateTime to, 
+        string? category = null,
         Func<int, string, Task>? onProgress = null, 
         CancellationToken ct = default)
     {
         var totalSw = System.Diagnostics.Stopwatch.StartNew();
-        _logger.LogInformation("EcoReportService.GenerateReportResultAsync started for AssetId={AssetId}", assetId);
+        _logger.LogInformation("EcoReportService.GenerateReportResultAsync started for AssetId={AssetId}, Category={Category}", assetId, category);
 
         // ── Phase 1: SQL Evidence extraction ──────────────────────────────
         if (onProgress != null)
@@ -73,6 +75,7 @@ public class EcoReportService : IPdfReportService
             assetId,
             from,
             to,
+            category,
             ct);
         dbSw.Stop();
         long dbDurationMs = dbSw.ElapsedMilliseconds;

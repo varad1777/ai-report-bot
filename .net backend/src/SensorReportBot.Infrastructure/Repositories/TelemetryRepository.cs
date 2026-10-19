@@ -39,12 +39,24 @@ public class TelemetryRepository : ITelemetryRepository
     {
         using var conn = CreateConnection();
         const string sql = @"
-            SELECT signal_id AS SignalId, asset_id AS AssetId, name AS Name, unit AS Unit, 
+            SELECT signal_id AS SignalId, asset_id AS AssetId, category AS Category, name AS Name, unit AS Unit, 
                    min_value AS MinValue, max_value AS MaxValue 
             FROM signals 
             WHERE asset_id = @assetId 
             ORDER BY signal_id;";
         var results = await conn.QueryAsync<SignalDto>(sql, new { assetId });
+        return results.ToList();
+    }
+
+    public async Task<IReadOnlyList<string>> GetSignalCategoriesByAssetAsync(int assetId, CancellationToken ct = default)
+    {
+        using var conn = CreateConnection();
+        const string sql = @"
+            SELECT DISTINCT category 
+            FROM signals 
+            WHERE asset_id = @assetId AND category IS NOT NULL AND category != '' 
+            ORDER BY category;";
+        var results = await conn.QueryAsync<string>(sql, new { assetId });
         return results.ToList();
     }
 
@@ -60,13 +72,28 @@ public class TelemetryRepository : ITelemetryRepository
             throw new KeyNotFoundException($"Asset with ID {request.AssetId} not found.");
         }
 
-        // 2. Fetch Signals (all if none specified)
+        // 2. Fetch Signals (all if none specified, or by category)
         List<SignalDto> targetSignals;
         if (request.SignalIds != null && request.SignalIds.Count > 0)
         {
-            const string sigSql = "SELECT signal_id AS SignalId, asset_id AS AssetId, name AS Name, unit AS Unit, min_value AS MinValue, max_value AS MaxValue FROM signals WHERE signal_id = ANY(@Ids);";
+            const string sigSql = "SELECT signal_id AS SignalId, asset_id AS AssetId, category AS Category, name AS Name, unit AS Unit, min_value AS MinValue, max_value AS MaxValue FROM signals WHERE signal_id = ANY(@Ids);";
             var sigs = await conn.QueryAsync<SignalDto>(sigSql, new { Ids = request.SignalIds.ToArray() });
             targetSignals = sigs.ToList();
+        }
+        else if (!string.IsNullOrWhiteSpace(request.Category))
+        {
+            const string sigSql = @"
+                SELECT signal_id AS SignalId, asset_id AS AssetId, category AS Category, name AS Name, unit AS Unit, min_value AS MinValue, max_value AS MaxValue 
+                FROM signals 
+                WHERE asset_id = @AssetId AND LOWER(category) = LOWER(@Category)
+                ORDER BY signal_id;";
+            var sigs = await conn.QueryAsync<SignalDto>(sigSql, new { AssetId = request.AssetId, Category = request.Category.Trim() });
+            targetSignals = sigs.ToList();
+            if (targetSignals.Count == 0)
+            {
+                var fallback = await GetSignalsByAssetAsync(request.AssetId, ct);
+                targetSignals = fallback.ToList();
+            }
         }
         else
         {

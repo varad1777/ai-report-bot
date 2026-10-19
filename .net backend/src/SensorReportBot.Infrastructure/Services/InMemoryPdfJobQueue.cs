@@ -117,6 +117,7 @@ public class InMemoryPdfJobQueue : IPdfJobQueue
             Id = Guid.NewGuid(),
             AssetId = request.AssetId,
             AssetName = assetName,
+            Category = request.Category,
             SignalIds = request.SignalIds,
             From = request.From,
             To = request.To,
