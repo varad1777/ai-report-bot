@@ -29,11 +29,6 @@ public class IntentExtractionStep : IChatStep
     private readonly ITelemetryRepository _telemetryRepo;
     private readonly ILogger<IntentExtractionStep> _logger;
 
-    private static readonly HashSet<string> ConfirmWords = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "yes", "yeah", "yep", "sure", "ok", "okay", "confirm", "proceed", "generate", "queue", "queue it", "generate report", "yes please", "do it"
-    };
-
     private static readonly HashSet<string> ResetWords = new(StringComparer.OrdinalIgnoreCase)
     {
         "reset", "clear", "cancel", "start over", "reset options", "clear options", "restart"
@@ -123,6 +118,22 @@ public class IntentExtractionStep : IChatStep
                 var (hasData, pointCount, minRecorded, maxRecorded) = await _telemetryRepo.CheckDataAvailabilityAsync(
                     turn.Parameters.AssetId.Value, period.Value.From, period.Value.To, ct);
 
+                // Auto-anchor relative timeframes (e.g. 24h, 2d, 16d) to latest recorded data if today is past the recorded dataset
+                if (!hasData && !string.IsNullOrWhiteSpace(turn.Parameters.TimeRange) && maxRecorded.HasValue)
+                {
+                    var anchoredPeriod = ResolveTimeframeToUtc(null, turn.Parameters, maxAnchorTime: maxRecorded.Value);
+                    if (anchoredPeriod.HasValue)
+                    {
+                        var (anchoredHasData, _, _, _) = await _telemetryRepo.CheckDataAvailabilityAsync(
+                            turn.Parameters.AssetId.Value, anchoredPeriod.Value.From, anchoredPeriod.Value.To, ct);
+                        if (anchoredHasData)
+                        {
+                            hasData = true;
+                            period = anchoredPeriod;
+                        }
+                    }
+                }
+
                 if (!hasData)
                 {
                     string rangeMsg = $"{period.Value.From:yyyy-MM-dd} to {period.Value.To:yyyy-MM-dd}";
@@ -193,50 +204,7 @@ public class IntentExtractionStep : IChatStep
             return new LayaAnalysis(fast, "reset_options", true, null, null);
         }
 
-        // ── 2. Deterministic Confirm Queue when already complete (C# Exact Match) ──
-        if (prevParams.HasAsset && prevParams.HasTime && IsConfirmation(userMsg))
-        {
-            var period = ResolveTimeframeToUtc(null, prevParams);
-            if (period.HasValue && prevParams.AssetId.HasValue)
-            {
-                var (hasData, pointCount, minRecorded, maxRecorded) = await _telemetryRepo.CheckDataAvailabilityAsync(
-                    prevParams.AssetId.Value, period.Value.From, period.Value.To, ct);
-
-                if (!hasData)
-                {
-                    string rangeMsg = $"{period.Value.From:yyyy-MM-dd} to {period.Value.To:yyyy-MM-dd}";
-                    string availableNotice = (minRecorded.HasValue && maxRecorded.HasValue)
-                        ? $" Recorded telemetry is available between {minRecorded.Value:yyyy-MM-dd} and {maxRecorded.Value:yyyy-MM-dd}."
-                        : "";
-
-                    prevParams.TimeRange = null;
-                    prevParams.FromDate = null;
-                    prevParams.ToDate = null;
-
-                    var fastNoData = new FastTurnResult(
-                        Reply: $"Cannot generate report: No telemetry data was found for **{prevParams.AssetName}** between {rangeMsg}.{availableNotice} Please select a date range within the recorded period.",
-                        IsOnTopic: true,
-                        IsComplete: false,
-                        SuggestedAction: SuggestedActions.SelectTimeframe,
-                        SuggestedOptions: DefaultTimeframeOptions,
-                        Parameters: prevParams
-                    );
-                    return new LayaAnalysis(fastNoData, "confirm_queue", true, null, null);
-                }
-            }
-
-            var fast = new FastTurnResult(
-                Reply: $"Understood. I am queueing the telemetry report generation for {prevParams.AssetName} ({prevParams.TimeRange ?? $"{prevParams.FromDate} to {prevParams.ToDate}"}).",
-                IsOnTopic: true,
-                IsComplete: true,
-                SuggestedAction: SuggestedActions.ConfirmQueue,
-                SuggestedOptions: new[] { "Yes", "Change Options" },
-                Parameters: prevParams
-            );
-            return new LayaAnalysis(fast, "confirm_queue", true, null, null);
-        }
-
-        // ── 3. Asset & Timeframe Matching via C# Engine ──
+        // ── 2. Asset & Timeframe Matching via C# Engine ──
         var assetMatch = AssetMatcher.Match(userMsg, assets);
         var matchedAsset = assetMatch.Asset;
         var timeResult = TimeframeParser.Parse(userMsg, allowBareNumber: true, utcNow: DateTime.UtcNow);
@@ -260,6 +228,21 @@ public class IntentExtractionStep : IChatStep
             {
                 var (hasData, pointCount, minRecorded, maxRecorded) = await _telemetryRepo.CheckDataAvailabilityAsync(
                     matchedAsset.AssetId, period.Value.From, period.Value.To, ct);
+
+                if (!hasData && !string.IsNullOrWhiteSpace(targetParams.TimeRange) && maxRecorded.HasValue)
+                {
+                    var anchoredPeriod = ResolveTimeframeToUtc(timeResult, targetParams, maxAnchorTime: maxRecorded.Value);
+                    if (anchoredPeriod.HasValue)
+                    {
+                        var (anchoredHasData, _, _, _) = await _telemetryRepo.CheckDataAvailabilityAsync(
+                            matchedAsset.AssetId, anchoredPeriod.Value.From, anchoredPeriod.Value.To, ct);
+                        if (anchoredHasData)
+                        {
+                            hasData = true;
+                            period = anchoredPeriod;
+                        }
+                    }
+                }
 
                 if (!hasData)
                 {
@@ -289,7 +272,7 @@ public class IntentExtractionStep : IChatStep
 
             string timeDesc = DescribeTimeframe(targetParams);
             var fast = new FastTurnResult(
-                Reply: $"I have configured the telemetry report for {targetParams.AssetName} covering {timeDesc}. Would you like me to generate this report?",
+                Reply: $"I have configured the telemetry report for {targetParams.AssetName} covering {timeDesc}. Please click 'Yes, Queue Report' below to generate.",
                 IsOnTopic: true,
                 IsComplete: true,
                 SuggestedAction: SuggestedActions.ConfirmQueue,
@@ -363,7 +346,7 @@ public class IntentExtractionStep : IChatStep
 
             string timeDesc = DescribeTimeframe(prevParams);
             var fast = new FastTurnResult(
-                Reply: $"I have configured the telemetry report for {prevParams.AssetName} covering {timeDesc}. Would you like me to generate this report?",
+                Reply: $"I have configured the telemetry report for {prevParams.AssetName} covering {timeDesc}. Please click 'Yes, Queue Report' below to generate.",
                 IsOnTopic: true,
                 IsComplete: true,
                 SuggestedAction: SuggestedActions.ConfirmQueue,
@@ -455,12 +438,6 @@ public class IntentExtractionStep : IChatStep
             || lower.Contains("bro") || lower.Contains("please") || lower.Contains("just");
     }
 
-    private static bool IsConfirmation(string message)
-    {
-        if (string.IsNullOrWhiteSpace(message)) return false;
-        string trimmed = message.Trim().TrimEnd('.', '!', '?');
-        return ConfirmWords.Contains(trimmed);
-    }
 
     private static string DescribeTimeframe(ExtractedReportParametersDto p)
     {
@@ -482,7 +459,10 @@ public class IntentExtractionStep : IChatStep
         return "the selected period";
     }
 
-    private static (DateTime From, DateTime To)? ResolveTimeframeToUtc(TimeframeResult? timeResult, ExtractedReportParametersDto? p)
+    private static (DateTime From, DateTime To)? ResolveTimeframeToUtc(
+        TimeframeResult? timeResult, 
+        ExtractedReportParametersDto? p, 
+        DateTime? maxAnchorTime = null)
     {
         string? fromStr = timeResult?.FromDate ?? p?.FromDate;
         string? toStr = timeResult?.ToDate ?? p?.ToDate;
@@ -491,7 +471,7 @@ public class IntentExtractionStep : IChatStep
         if (!string.IsNullOrWhiteSpace(fromStr) &&
             DateTime.TryParse(fromStr, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var f))
         {
-            DateTime t = DateTime.UtcNow;
+            DateTime t = maxAnchorTime ?? DateTime.UtcNow;
             if (!string.IsNullOrWhiteSpace(toStr) &&
                 DateTime.TryParse(toStr, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsedTo))
             {
@@ -504,7 +484,7 @@ public class IntentExtractionStep : IChatStep
         if (!string.IsNullOrWhiteSpace(rangeStr))
         {
             string tr = rangeStr.Trim().ToLowerInvariant();
-            var now = DateTime.UtcNow;
+            var now = maxAnchorTime ?? DateTime.UtcNow;
             if (tr.EndsWith("h") && double.TryParse(tr[..^1], NumberStyles.Any, CultureInfo.InvariantCulture, out var h))
             {
                 return (now.AddHours(-h), now);
@@ -548,7 +528,7 @@ public class IntentExtractionStep : IChatStep
         }
 
         if (reply == null) return (null, null);
-        return (reply, ChatResponseSynchronizer.Sync(reply, state.PreviousParameters, assets));
+        return (reply, ChatResponseSynchronizer.Sync(reply, state.PreviousParameters, assets, state.UserMessage));
     }
 
     private async Task<string> BuildSystemPromptAsync(IReadOnlyList<AssetDto> assets, CancellationToken ct)

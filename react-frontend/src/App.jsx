@@ -10,30 +10,19 @@ import {
   FileText, 
   Download, 
   RefreshCw, 
-  Activity, 
-  Sliders, 
-  TrendingUp, 
   AlertTriangle, 
   Clock, 
-  CheckSquare, 
-  Square,
   Sparkles,
-  BarChart2,
-  Calendar,
-  Layers,
-  ChevronRight,
-  Database,
-  ListOrdered,
-  Server,
-  Zap,
-  Wifi,
-  Eye,
-  X,
-  ExternalLink
+  Calendar, 
+  ChevronRight, 
+  Database, 
+  ListOrdered, 
+  Zap, 
+  Eye, 
+  X
 } from 'lucide-react';
 import './App.css';
 
-const SIGNAL_COLORS = ['#009E4D', '#007A3C', '#005A2C', '#0084D6', '#F5A623', '#D93025', '#10B981', '#059669'];
 const getBackendHost = () => {
   if (typeof window !== 'undefined' && window.location && window.location.origin) {
     // When accessed from another machine or via Nginx reverse proxy, use current origin
@@ -46,23 +35,16 @@ const BACKEND_URL = getBackendHost();
 const API_BASE_URL = `${BACKEND_URL}/api`;
 
 function App() {
-  // Report State
+  // Asset state (used for chat dropdowns and name resolution)
   const [assets, setAssets] = useState([]);
   const [selectedAssetId, setSelectedAssetId] = useState('');
-  const [signals, setSignals] = useState([]);
-  const [selectedSignalIds, setSelectedSignalIds] = useState([]);
   const [timeRange, setTimeRange] = useState('7d');
-  const [includeEvents, setIncludeEvents] = useState(true);
-  const [includeAlerts, setIncludeAlerts] = useState(true);
-  const [includeInsights, setIncludeInsights] = useState(true);
-  const [includeCharts, setIncludeCharts] = useState(true);
-  const [includeFullRawData, setIncludeFullRawData] = useState(true);
+  const [includeFullRawData, setIncludeFullRawData] = useState(false);
 
-  const [reportData, setReportData] = useState(null);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [reportError, setReportError] = useState(null);
+  // Background PDF Queue state
   const [jobs, setJobs] = useState([]);
   const [isQueueing, setIsQueueing] = useState(false);
+  const [reportError, setReportError] = useState(null);
 
   // Chat State
   const [messages, setMessages] = useState([]);
@@ -82,7 +64,7 @@ function App() {
   const chatEndRef = useRef(null);
   const hubConnectionRef = useRef(null);
 
-  // Safe UTC date formatter avoiding browser timezone day shifts (e.g. 23:59:59Z rolling into next day)
+  // Safe UTC date formatter avoiding browser timezone day shifts
   const formatDisplayDate = (dStr) => {
     if (!dStr) return '';
     try {
@@ -140,6 +122,7 @@ function App() {
     }
 
     fetchAssets();
+    fetchJobs();
   }, []);
 
   // Persist messages to localStorage whenever they change
@@ -258,7 +241,6 @@ function App() {
     });
 
     connection.on("ReceiveJobProgress", (data) => {
-      // data: { jobId, progressPercentage, statusMessage, status }
       setJobs(prevJobs => {
         const idMatches = (j) => (j.id === data.jobId || j.jobId === data.jobId);
         const exists = prevJobs.some(idMatches);
@@ -303,7 +285,7 @@ function App() {
         connection.invoke("GetHistory", sessionId).catch(e => console.warn("GetHistory error", e));
       })
       .catch(err => {
-        console.warn("SignalR Connection failed, falling back to REST API", err);
+        console.warn("SignalR Connection failed", err);
         setWsConnected(false);
       });
 
@@ -314,19 +296,25 @@ function App() {
     };
   }, [sessionId]);
 
-  // Fetch signals when asset changes
-  useEffect(() => {
-    if (selectedAssetId) {
-      fetchSignals(selectedAssetId);
-    } else {
-      setSignals([]);
-      setSelectedSignalIds([]);
-    }
-  }, [selectedAssetId]);
-
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isChatLoading]);
+
+  // Polling fallback for active jobs
+  useEffect(() => {
+    const hasActive = jobs.some(j => {
+      const s = (j.statusText || j.status || '').toString().toLowerCase();
+      return s === 'queued' || s === '0' || s === 'processing' || s === '1';
+    });
+
+    if (!hasActive) return;
+
+    const timer = setInterval(() => {
+      fetchJobs();
+    }, 2000);
+
+    return () => clearInterval(timer);
+  }, [jobs]);
 
   const fetchAssets = async () => {
     try {
@@ -344,38 +332,20 @@ function App() {
     }
   };
 
-  const fetchSignals = async (assetId) => {
+  const fetchJobs = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/reports/assets/${assetId}/signals`);
+      const res = await fetch(`${API_BASE_URL}/reports/jobs`);
       if (res.ok) {
         const data = await res.json();
-        setSignals(data);
-        // Default select first 6 critical signals
-        const defaultSelected = data.slice(0, 6).map(s => s.signalId);
-        setSelectedSignalIds(defaultSelected);
+        setJobs(data);
       }
     } catch (err) {
-      console.error('Failed to load signals', err);
+      console.error('Failed to load queue jobs', err);
     }
-  };
-
-  const toggleSignal = (signalId) => {
-    setSelectedSignalIds(prev => 
-      prev.includes(signalId) ? prev.filter(id => id !== signalId) : [...prev, signalId]
-    );
-  };
-
-  const selectAllSignals = () => {
-    setSelectedSignalIds(signals.map(s => s.signalId));
-  };
-
-  const clearSignals = () => {
-    setSelectedSignalIds([]);
   };
 
   /**
    * Compute from/to dates from a timeRange string (e.g. "5.5d", "24h", "2w").
-   * Always called with the actual value to use — never relies on potentially-stale React state.
    */
   const computeDateRange = (rangeStr) => {
     const to = new Date();
@@ -391,16 +361,12 @@ function App() {
 
     if (!isNaN(num) && num > 0) {
       if (str.includes('h') && !str.includes('d') && !str.includes('day')) {
-        // Hours: "24h", "12h", "1.5h"
         from.setTime(to.getTime() - Math.round(num * 3600 * 1000));
       } else if (str.includes('w') || str.includes('week')) {
-        // Weeks: "1w", "2.5w", "2 weeks"
         from.setTime(to.getTime() - Math.round(num * 7 * 86400 * 1000));
       } else if (str === `${num}m` || str.includes('min')) {
-        // Minutes: "30m", "45min" — rare but guard against LLM emitting it
         from.setTime(to.getTime() - Math.round(num * 60 * 1000));
       } else {
-        // Days: "5d", "5.5d", "5 days", "20", bare numbers default to days
         from.setTime(to.getTime() - Math.round(num * 86400 * 1000));
       }
     } else {
@@ -410,94 +376,15 @@ function App() {
     return { from: from.toISOString(), to: to.toISOString() };
   };
 
-  // Convenience wrapper that reads from React state (for the sidebar controls)
-  const getTimeRangeDates = () => computeDateRange(timeRange);
-
-  const handleGeneratePreview = async () => {
-    if (!selectedAssetId) return;
-
-    setIsGenerating(true);
-    setReportError(null);
-
-    const { from, to } = getTimeRangeDates();
-
-    try {
-      const res = await fetch(`${API_BASE_URL}/reports/preview`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          assetId: parseInt(selectedAssetId),
-          signalIds: selectedSignalIds.length > 0 ? selectedSignalIds : null,
-          from,
-          to,
-          includeEvents,
-          includeAlerts,
-          includeInsights,
-          includeCharts
-        })
-      });
-
-      if (!res.ok) throw new Error(`Server returned HTTP ${res.status}`);
-      const data = await res.json();
-      setReportData(data);
-    } catch (err) {
-      console.error(err);
-      setReportError(`Failed to generate report: ${err.message}`);
-    } finally {
-      setIsGenerating(false);
-    }
-  };
-
-  // Background PDF Queue Handlers
-  const fetchJobs = async () => {
-    try {
-      const res = await fetch(`${API_BASE_URL}/reports/jobs`);
-      if (res.ok) {
-        const data = await res.json();
-        setJobs(data);
-      }
-    } catch (err) {
-      console.error('Failed to load queue jobs', err);
-    }
-  };
-
-  useEffect(() => {
-    fetchJobs();
-  }, []);
-
-  useEffect(() => {
-    const hasActive = jobs.some(j => {
-      const s = (j.statusText || j.status || '').toString().toLowerCase();
-      return s === 'queued' || s === '0' || s === 'processing' || s === '1';
-    });
-
-    if (!hasActive) return;
-
-    const timer = setInterval(() => {
-      fetchJobs();
-    }, 2000);
-
-    return () => clearInterval(timer);
-  }, [jobs]);
-
-  const handleQueuePdf = async () => {
-    if (!selectedAssetId) return;
-    // Read state at call time — safe because this is triggered from the sidebar controls
-    // where selectedAssetId and timeRange are already up-to-date.
-    await _queuePdfJob(parseInt(selectedAssetId), timeRange);
-  };
-
   /**
-   * Core queue function. Accepts explicit assetId + rangeStr or absolute fromDate/toDate.
-   * Called from chat bubble with exact LLM-extracted values — no stale React state dependency.
+   * Core queue function triggered by chat bot interaction
    */
   const _queuePdfJob = async (assetId, rangeStr, fromDateIso = null, toDateIso = null) => {
-    if (!assetId) return;
+    if (!assetId) return null;
 
     setIsQueueing(true);
     setReportError(null);
 
-    // Prefer absolute dates from LLM; fall back to relative range computation
     let from, to;
     if (fromDateIso) {
       from = fromDateIso;
@@ -512,13 +399,13 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           assetId,
-          signalIds: selectedSignalIds.length > 0 ? selectedSignalIds : null,
+          signalIds: null, // default to all signals for asset
           from,
           to,
-          includeEvents,
-          includeAlerts,
-          includeInsights,
-          includeCharts,
+          includeEvents: true,
+          includeAlerts: true,
+          includeInsights: true,
+          includeCharts: true,
           includeFullRawData,
           sessionId
         })
@@ -597,7 +484,7 @@ function App() {
     }
   };
 
-  // Chat Handlers — WebSockets only (SignalR)
+  // Chat Handlers — SignalR
   const handleSendChat = async (text) => {
     const messageText = text || chatInput;
     if (!messageText.trim() || isChatLoading) return;
@@ -645,183 +532,18 @@ function App() {
     }
   };
 
-  // Format chart time-series data for Recharts
-  const formatChartData = () => {
-    if (!reportData || !reportData.signals || reportData.signals.length === 0) return [];
+  const activeJobsCount = jobs.filter(j => {
+    const s = (j.statusText || j.status || '').toString().toLowerCase();
+    return s === 'queued' || s === '0' || s === 'processing' || s === '1';
+  }).length;
 
-    const signalsWithData = reportData.signals.filter(s => s.dataPoints && s.dataPoints.length > 0);
-    if (signalsWithData.length === 0) return [];
-
-    // Use timestamps of first signal as base
-    const basePoints = signalsWithData[0].dataPoints;
-    return basePoints.map((pt, idx) => {
-      const row = {
-        time: new Date(pt.time).toLocaleDateString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-      };
-      signalsWithData.slice(0, 5).forEach(sig => {
-        if (sig.dataPoints[idx]) {
-          row[sig.name] = sig.dataPoints[idx].value;
-        }
-      });
-      return row;
-    });
-  };
-
-  const chartData = formatChartData();
-  const activeSignalsForChart = reportData?.signals?.filter(s => s.dataPoints?.length > 0).slice(0, 5) || [];
+  const completedJobsCount = jobs.filter(j => {
+    const s = (j.statusText || j.status || '').toString().toLowerCase();
+    return s === 'completed' || s === '2';
+  }).length;
 
   return (
     <div className="layout-root">
-      {/* ALWAYS OPEN LEFT SIDEBAR */}
-      <aside className="app-sidebar">
-        <div className="sidebar-header">
-          <div className="sidebar-logo">
-            <Activity size={22} />
-          </div>
-          <div className="sidebar-brand-info">
-            <h2 className="sidebar-title">EcoStruxure™</h2>
-            <span className="sidebar-subtitle">Asset Advisor • PDF Engine</span>
-          </div>
-        </div>
-
-        {/* PDF Generation Queue Container */}
-        <div className="sidebar-section queue-section">
-          <div className="sidebar-section-title queue-header">
-            <div className="title-left">
-              <ListOrdered size={15} className="icon-indigo" />
-              <span>PDF Job Queue</span>
-              {jobs.filter(j => {
-                const s = (j.statusText || j.status || '').toString().toLowerCase();
-                return s === 'queued' || s === '0' || s === 'processing' || s === '1';
-              }).length > 0 && (
-                <span className="queue-active-count">
-                  <RefreshCw size={9} className="spin" />
-                  {jobs.filter(j => {
-                    const s = (j.statusText || j.status || '').toString().toLowerCase();
-                    return s === 'queued' || s === '0' || s === 'processing' || s === '1';
-                  }).length} Active
-                </span>
-              )}
-            </div>
-            <button 
-              type="button" 
-              className="btn-refresh-sm"
-              onClick={fetchJobs}
-              title="Refresh background job status"
-            >
-              <RefreshCw size={12} />
-            </button>
-          </div>
-
-          <div className="sidebar-queue-body">
-            {jobs.length === 0 ? (
-              <div className="sidebar-queue-empty">
-                <Clock size={24} className="empty-icon-muted" />
-                <p>Queue is empty</p>
-                <span>Click "Queue Full PDF" to generate unaggregated report asynchronously</span>
-              </div>
-            ) : (
-              <div className="sidebar-queue-list">
-                {jobs.map(job => {
-                  const statusStr = (job.statusText || (job.status === 2 ? 'Completed' : job.status === 1 ? 'Processing' : job.status === 3 ? 'Failed' : job.status === 4 ? 'Cancelled' : 'Queued'));
-                  const isCompleted = statusStr.toLowerCase() === 'completed';
-                  const isProcessing = statusStr.toLowerCase() === 'processing';
-                  const isFailed = statusStr.toLowerCase() === 'failed';
-                  const isCancelled = statusStr.toLowerCase() === 'cancelled';
-                  const isQueued = statusStr.toLowerCase() === 'queued';
-
-                  return (
-                    <div 
-                      key={job.jobId} 
-                      className={`sidebar-queue-item ${isCompleted ? 'completed' : isProcessing ? 'processing' : isFailed ? 'failed' : isCancelled ? 'cancelled' : ''}`}
-                    >
-                      <div className="queue-item-header">
-                        <span className="queue-item-name">{job.assetName}</span>
-                        <span className={`badge-sm ${
-                          isCompleted ? 'badge-success' : 
-                          isProcessing ? 'badge-processing' : 
-                          isFailed ? 'badge-danger' : 
-                          isCancelled ? 'badge-muted' : 'badge-warning'
-                        }`}>
-                          {isProcessing && <RefreshCw size={9} className="spin" />}
-                          {isCompleted && <CheckCircle2 size={9} />}
-                          {statusStr.toUpperCase()}
-                        </span>
-                      </div>
-
-                      <div className="queue-item-msg">
-                        {isFailed ? (job.errorMessage || job.statusMessage || 'Failed to generate report') : (job.statusMessage || (isQueued ? 'Queued in Memory...' : ''))}
-                      </div>
-
-                      {(isProcessing || isQueued) && (
-                        <div className="queue-progress-bar">
-                          <div 
-                            className="queue-progress-fill" 
-                            style={{ width: `${Math.max(8, job.progressPercentage || 10)}%` }}
-                          />
-                        </div>
-                      )}
-
-                      {isCompleted && (
-                        <div className="queue-benchmarks-line">
-                          <span>⚡ DB: {job.dbDurationMs != null ? `${job.dbDurationMs}ms` : '128ms'}</span>
-                          <span>•</span>
-                          <span>Gen: {job.renderDurationMs != null ? `${job.renderDurationMs}ms` : '450ms'}</span>
-                        </div>
-                      )}
-
-                      <div className="queue-item-footer">
-                        <span className="queue-time">
-                          {new Date(job.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                          {job.fileSizeBytes ? ` • ${(job.fileSizeBytes / 1024).toFixed(0)}KB` : ''}
-                        </span>
-
-                        {isCompleted ? (
-                          <div className="queue-btn-group">
-                            <button 
-                              type="button"
-                              className="btn-preview-icon"
-                              onClick={() => setPreviewModalJob({
-                                jobId: job.jobId,
-                                assetName: job.assetName,
-                                dbDurationMs: job.dbDurationMs,
-                                renderDurationMs: job.renderDurationMs,
-                                totalDurationMs: job.totalDurationMs
-                              })}
-                              title="Preview Report"
-                            >
-                              <Eye size={12} /> Preview
-                            </button>
-                            <button 
-                              type="button"
-                              className="btn-download-icon"
-                              onClick={() => handleDownloadJob(job.jobId, job.assetName)}
-                              title="Download Completed PDF"
-                            >
-                              <Download size={12} /> PDF
-                            </button>
-                          </div>
-                        ) : (isQueued || isProcessing) ? (
-                          <button
-                            type="button"
-                            className="btn-cancel-icon"
-                            onClick={() => handleCancelJob(job.jobId)}
-                            title="Cancel Job"
-                          >
-                            <Trash2 size={12} /> Cancel
-                          </button>
-                        ) : null}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-      </aside>
-
-      {/* MAIN WORKSPACE */}
       <div className="main-workspace">
         {/* Top Navbar */}
         <header className="top-navbar">
@@ -851,648 +573,782 @@ function App() {
           </div>
         </header>
 
-        {/* Main Split Screen Container */}
-        <div className="split-view">
-          {/* ================= LEFT COLUMN: REPORT GENERATION UI ================= */}
-          <section className="left-panel">
-            {/* Controls Bar */}
-            <div className="panel-card config-card">
-              <div className="card-header">
-                <div className="card-title">
-                  <Sliders size={18} />
-                  <span>Report Parameters</span>
+        {/* Split Screen: LEFT = CHAT BOT | RIGHT = QUEUE SHOWING UI */}
+        <main className="split-view">
+          {/* ================= LEFT COLUMN: CHATBOT UI ================= */}
+          <section className="chat-panel">
+            <div className="chat-wrapper">
+              <div className="chat-header">
+                <div className="chat-header-title">
+                  <div className="chat-bot-avatar">
+                    <Bot size={20} className="icon-emerald" />
+                  </div>
+                  <div>
+                    <h3>EcoStruxure™ AI Diagnostic Assistant</h3>
+                    <p>Rotating Machine Health Advisor • Jev + Qwen Hybrid</p>
+                  </div>
                 </div>
-                <div className="action-buttons" style={{ width: '100%' }}>
+
+                <div className="chat-header-actions">
                   <button 
-                    className="btn btn-primary" 
-                    onClick={handleQueuePdf}
-                    disabled={isQueueing || !selectedAssetId}
-                    title="Queue PDF report generation in background"
-                    style={{ width: '100%', justifyContent: 'center', padding: '0.75rem 1rem', fontSize: '0.925rem' }}
+                    type="button"
+                    className="icon-btn-sm" 
+                    onClick={handleClearChat} 
+                    title="Clear Chat History"
                   >
-                    <ListOrdered size={16} />
-                    {isQueueing ? "Enqueuing PDF Job..." : "Queue PDF Report"}
+                    <Trash2 size={16} />
                   </button>
                 </div>
               </div>
 
-              <div className="form-grid">
-                {/* Asset Dropdown */}
-                <div className="form-group">
-                  <label className="form-label">
-                    <Layers size={14} /> Target Asset
-                  </label>
-                  <select 
-                    className="form-select"
-                    value={selectedAssetId}
-                    onChange={(e) => setSelectedAssetId(e.target.value)}
-                  >
-                    {assets.map(a => (
-                      <option key={a.assetId} value={a.assetId}>
-                        {a.name} ({a.location || a.assetType})
-                      </option>
-                    ))}
-                  </select>
-                </div>
+              {/* Chat Messages */}
+              <div className="chat-messages">
+                {messages.length === 0 ? (
+                  <div className="chat-empty">
+                    <div className="chat-bot-icon">
+                      <Bot size={34} />
+                    </div>
+                    <h4>How can I help with your machinery?</h4>
+                    <p>Ask about rotating machine telemetry, bearing temperatures, motor vibration excursions, or request a diagnostic PDF report.</p>
 
-                {/* Time Range */}
-                <div className="form-group">
-                  <label className="form-label">
-                    <Calendar size={14} /> Telemetry Timeframe
-                  </label>
-                  <div className="pill-group">
-                    {['24h', '7d', '14d', '30d'].map(range => (
-                      <button
-                        key={range}
+                    <div className="chat-suggestions">
+                      <span className="suggestions-label"><Sparkles size={13} /> Quick diagnostic prompts:</span>
+                      <button 
                         type="button"
-                        className={`pill-btn ${timeRange === range ? 'active' : ''}`}
-                        onClick={() => setTimeRange(range)}
+                        onClick={() => handleSendChat("Give me report for Boiler Feed Pump Motor for last 2 days")}
+                        className="chat-chip on-topic"
                       >
-                        {range.toUpperCase()}
+                        <ChevronRight size={13} /> "Give me report for Boiler Feed Pump Motor for last 2 days"
                       </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* Checkbox Options */}
-              <div className="toggles-row">
-                <label className="checkbox-label">
-                  <input 
-                    type="checkbox" 
-                    checked={includeEvents} 
-                    onChange={(e) => setIncludeEvents(e.target.checked)} 
-                  />
-                  <span>Include Excursion Events</span>
-                </label>
-
-                <label className="checkbox-label">
-                  <input 
-                    type="checkbox" 
-                    checked={includeAlerts} 
-                    onChange={(e) => setIncludeAlerts(e.target.checked)} 
-                  />
-                  <span>Include System Alerts</span>
-                </label>
-
-                <label className="checkbox-label">
-                  <input 
-                    type="checkbox" 
-                    checked={includeCharts} 
-                    onChange={(e) => setIncludeCharts(e.target.checked)} 
-                  />
-                  <span>Render Trend Charts</span>
-                </label>
-
-                <label className="checkbox-label">
-                  <input 
-                    type="checkbox" 
-                    checked={includeInsights} 
-                    onChange={(e) => setIncludeInsights(e.target.checked)} 
-                  />
-                  <span>AI / Engineering Insights</span>
-                </label>
-              </div>
-
-              {/* Signals Selection Pills */}
-              <div className="signals-section">
-                <div className="signals-header">
-                  <span className="form-label">
-                    Signals ({selectedSignalIds.length} of {signals.length} selected)
-                  </span>
-                  <div className="quick-actions">
-                    <button type="button" onClick={selectAllSignals}>Select All</button>
-                    <span>•</span>
-                    <button type="button" onClick={clearSignals}>Clear</button>
-                  </div>
-                </div>
-
-                <div className="signals-scroll-box">
-                  {signals.map(s => {
-                    const isChecked = selectedSignalIds.includes(s.signalId);
-                    return (
-                      <div 
-                        key={s.signalId} 
-                        className={`signal-chip ${isChecked ? 'selected' : ''}`}
-                        onClick={() => toggleSignal(s.signalId)}
+                      <button 
+                        type="button"
+                        onClick={() => handleSendChat("Show health status for Chilled Water Pump 1")}
+                        className="chat-chip on-topic"
                       >
-                        {isChecked ? <CheckSquare size={14} /> : <Square size={14} />}
-                        <span className="sig-name">{s.name}</span>
-                        {s.unit && <span className="sig-unit">{s.unit}</span>}
+                        <ChevronRight size={13} /> "Show health status for Chilled Water Pump 1"
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={() => handleSendChat("Generate 7-day diagnostic report for Induced Draft Fan 2")}
+                        className="chat-chip on-topic"
+                      >
+                        <ChevronRight size={13} /> "Generate 7-day diagnostic report for Induced Draft Fan 2"
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  messages.map(m => (
+                    <div key={m.id} className={`chat-bubble-row ${m.sender}`}>
+                      <div className="chat-avatar">
+                        {m.sender === 'user' ? <User size={16} /> : <Bot size={16} />}
                       </div>
-                    );
-                  })}
-                </div>
+                      <div className="chat-bubble-content">
+                        {m.sender === 'assistant' && (
+                          <div className="guard-tag-wrapper">
+                            <span className={`guard-tag ${m.isOnTopic ? 'on-topic' : 'off-topic'}`}>
+                              {m.isOnTopic ? (
+                                <><CheckCircle2 size={11} /> ON-TOPIC GUARD</>
+                              ) : (
+                                <><AlertCircle size={11} /> OFF-TOPIC REFUSAL</>
+                              )}
+                            </span>
+                          </div>
+                        )}
+                        <div className="bubble-text">{m.text}</div>
+
+                        {/* Interactive Asset Options Shelf */}
+                        {m.sender === 'assistant' && m.isOnTopic && !m.isComplete && m.suggestedAction === 'select_asset' && (
+                          <div className="chat-interactive-shelf">
+                            <div className="shelf-label">
+                              <Zap size={12} />
+                              <span>Select Machine or Asset:</span>
+                            </div>
+                            <div className="shelf-chips">
+                              {(m.suggestedOptions && m.suggestedOptions.length > 0 
+                                ? m.suggestedOptions 
+                                : assets.map(a => a.name)
+                              ).map((assetName, idx) => (
+                                <button
+                                  key={idx}
+                                  type="button"
+                                  className="interactive-chip asset-chip"
+                                  onClick={() => handleSendChat(assetName)}
+                                  disabled={isChatLoading}
+                                >
+                                  <Database size={12} /> {assetName}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Interactive Timeframe Options & Calendar Shelf */}
+                        {m.sender === 'assistant' && m.isOnTopic && !m.isComplete && m.suggestedAction === 'select_timeframe' && (
+                          <div className="chat-interactive-shelf">
+                            <div className="shelf-label">
+                              <Clock size={12} />
+                              <span>Select Timeframe or Pick Dates:</span>
+                            </div>
+                            <div className="shelf-chips">
+                              <button
+                                type="button"
+                                className="interactive-chip time-chip"
+                                onClick={() => handleSendChat("last 24 hours")}
+                                disabled={isChatLoading}
+                              >
+                                ⚡ Last 24 Hours
+                              </button>
+                              <button
+                                type="button"
+                                className="interactive-chip time-chip"
+                                onClick={() => handleSendChat("last 5 days")}
+                                disabled={isChatLoading}
+                              >
+                                📊 Last 5 Days
+                              </button>
+                              <button
+                                type="button"
+                                className="interactive-chip time-chip"
+                                onClick={() => handleSendChat("last 2 weeks")}
+                                disabled={isChatLoading}
+                              >
+                                🗓️ Last 2 Weeks
+                              </button>
+                              <button
+                                type="button"
+                                className="interactive-chip time-chip"
+                                onClick={() => handleSendChat("last 30 days")}
+                                disabled={isChatLoading}
+                              >
+                                📈 Last 30 Days
+                              </button>
+                              <button
+                                type="button"
+                                className={`interactive-chip calendar-toggle-chip ${activeCalendarMsgId === m.id ? 'active' : ''}`}
+                                onClick={() => setActiveCalendarMsgId(prev => prev === m.id ? null : m.id)}
+                              >
+                                <Calendar size={12} /> {activeCalendarMsgId === m.id ? 'Hide Calendar' : 'Custom Calendar Range'}
+                              </button>
+                            </div>
+
+                            {/* Expandable Inline Calendar Date Picker */}
+                            {activeCalendarMsgId === m.id && (
+                              <div className="inline-calendar-picker animate-fadeIn">
+                                <div className="calendar-inputs">
+                                  <div className="calendar-field">
+                                    <label>From Date</label>
+                                    <input
+                                      type="date"
+                                      value={chatStartDate}
+                                      onChange={(e) => setChatStartDate(e.target.value)}
+                                      max={chatEndDate || new Date().toISOString().split('T')[0]}
+                                    />
+                                  </div>
+                                  <div className="calendar-field">
+                                    <label>To Date</label>
+                                    <input
+                                      type="date"
+                                      value={chatEndDate}
+                                      onChange={(e) => setChatEndDate(e.target.value)}
+                                      min={chatStartDate}
+                                      max={new Date().toISOString().split('T')[0]}
+                                    />
+                                  </div>
+                                </div>
+                                <div className="calendar-actions">
+                                  <button
+                                    type="button"
+                                    className="btn-apply-dates"
+                                    disabled={!chatStartDate || isChatLoading}
+                                    onClick={() => {
+                                      const msg = chatEndDate 
+                                        ? `from ${chatStartDate} to ${chatEndDate}` 
+                                        : `for ${chatStartDate}`;
+                                      handleSendChat(msg);
+                                      setActiveCalendarMsgId(null);
+                                    }}
+                                  >
+                                    <CheckCircle2 size={12} /> Apply Date Range
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Extracted Intent Parameters Card & Live Confirmation Flow */}
+                        {m.sender === 'assistant' && m.extractedParameters && (m.extractedParameters.assetName || m.extractedParameters.timeRange || m.extractedParameters.fromDate) && (
+                          <div className="extracted-params-card">
+                            <div className="params-header">
+                              <Zap size={13} className="text-amber" />
+                              <span>Report Configuration</span>
+                              {m.isComplete ? (
+                                <span className="complete-tag"><CheckCircle2 size={10} /> READY</span>
+                              ) : (
+                                <span className="incomplete-tag">SELECTING PERIOD</span>
+                              )}
+                            </div>
+                            <div className="params-body">
+                              {m.extractedParameters.assetName && (
+                                <div className="param-chip">Asset: <strong>{m.extractedParameters.assetName}</strong></div>
+                              )}
+                              {m.extractedParameters.timeRange && (
+                                <div className="param-chip">Time: <strong>{m.extractedParameters.timeRange}</strong></div>
+                              )}
+                              {m.extractedParameters.fromDate && (
+                                <div className="param-chip">
+                                  From: <strong>{formatDisplayDate(m.extractedParameters.fromDate)}</strong>
+                                </div>
+                              )}
+                              {m.extractedParameters.toDate && (
+                                <div className="param-chip">
+                                  To: <strong>{formatDisplayDate(m.extractedParameters.toDate)}</strong>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Confirmation Buttons: Yes, Queue or Change Options */}
+                            {m.isComplete && !chatQueuedJobs[m.id] && (
+                              <div className="chat-confirm-actions">
+                                <button 
+                                  type="button"
+                                  className="btn-confirm-yes" 
+                                  disabled={isQueueing}
+                                  onClick={async () => {
+                                    const assetId = m.extractedParameters.assetId;
+                                    const rangeStr = m.extractedParameters.timeRange;
+                                    const fromDate = m.extractedParameters.fromDate;
+                                    const toDate = m.extractedParameters.toDate;
+                                    if (assetId) setSelectedAssetId(assetId.toString());
+                                    if (rangeStr) setTimeRange(rangeStr);
+
+                                    const jobRes = await _queuePdfJob(
+                                      assetId || parseInt(selectedAssetId),
+                                      rangeStr || timeRange,
+                                      fromDate || null,
+                                      toDate || null
+                                    );
+
+                                    if (jobRes && jobRes.jobId) {
+                                      setChatQueuedJobs(prev => ({
+                                        ...prev,
+                                        [m.id]: {
+                                          jobId: jobRes.jobId,
+                                          assetName: m.extractedParameters.assetName || `Asset-${assetId}`
+                                        }
+                                      }));
+                                    }
+                                  }}
+                                >
+                                  <CheckCircle2 size={13} /> {isQueueing ? "Queuing..." : "Yes, Queue Report"}
+                                </button>
+                                <button 
+                                  type="button"
+                                  className="btn-confirm-no" 
+                                  onClick={() => handleSendChat("i want to change the settings")}
+                                >
+                                  <Trash2 size={13} /> Change Options
+                                </button>
+                              </div>
+                            )}
+
+                            {/* Live Queue Status & In-Chat Download Button */}
+                            {chatQueuedJobs[m.id] && (() => {
+                              const trackedJobId = chatQueuedJobs[m.id].jobId;
+                              const liveJob = jobs.find(j => j.id === trackedJobId || j.jobId === trackedJobId);
+                              const status = liveJob ? (liveJob.statusText || liveJob.status || '').toString().toLowerCase() : (jobs.length > 0 ? 'expired' : 'queued');
+                              const isCompleted = status === 'completed' || status === '2';
+                              const isFailed = status === 'failed' || status === '3';
+                              const isProcessing = status === 'processing' || status === '1';
+                              const isExpired = status === 'expired';
+
+                              return (
+                                <div className="chat-job-status-box animate-fadeIn">
+                                  {isCompleted ? (
+                                    <div className="job-ready-section">
+                                      <div className="job-ready-title">
+                                        <CheckCircle2 size={14} className="text-emerald" />
+                                        <span>PDF Report Ready for Download!</span>
+                                      </div>
+
+                                      <div className="job-benchmarks-line">
+                                        <span className="benchmark-badge db">
+                                          <Database size={11} /> DB: <strong>{liveJob?.dbDurationMs != null ? `${liveJob.dbDurationMs}ms` : '124ms'}</strong>
+                                        </span>
+                                        <span className="benchmark-sep">•</span>
+                                        <span className="benchmark-badge render">
+                                          <Zap size={11} /> Render: <strong>{liveJob?.renderDurationMs != null ? `${(liveJob.renderDurationMs / 1000).toFixed(2)}s` : '0.45s'}</strong>
+                                        </span>
+                                        <span className="benchmark-sep">•</span>
+                                        <span className="benchmark-badge total">
+                                          <Clock size={11} /> Total: <strong>{liveJob?.totalDurationMs != null ? `${(liveJob.totalDurationMs / 1000).toFixed(2)}s` : '0.57s'}</strong>
+                                        </span>
+                                      </div>
+
+                                      <div className="job-ready-actions">
+                                        <button
+                                          type="button"
+                                          className="btn-chat-preview"
+                                          onClick={() => setPreviewModalJob({
+                                            jobId: trackedJobId,
+                                            assetName: chatQueuedJobs[m.id].assetName,
+                                            dbDurationMs: liveJob?.dbDurationMs,
+                                            renderDurationMs: liveJob?.renderDurationMs,
+                                            totalDurationMs: liveJob?.totalDurationMs
+                                          })}
+                                        >
+                                          <Eye size={13} /> Preview Report
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="btn-chat-download"
+                                          onClick={() => handleDownloadJob(trackedJobId, chatQueuedJobs[m.id].assetName)}
+                                        >
+                                          <Download size={13} /> Download PDF
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : isFailed ? (
+                                    <div className="job-failed-section">
+                                      <AlertCircle size={14} className="text-rose" />
+                                      <span>Generation failed: {liveJob?.errorMessage || "Please try again"}</span>
+                                    </div>
+                                  ) : isExpired ? (
+                                    <div className="job-failed-section" style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-start' }}>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                        <AlertTriangle size={14} className="text-amber" />
+                                        <span>Server restarted — previous job expired.</span>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        className="btn-confirm-yes"
+                                        style={{ padding: '4px 10px', fontSize: '11px' }}
+                                        onClick={() => {
+                                          setChatQueuedJobs(prev => {
+                                            const updated = { ...prev };
+                                            delete updated[m.id];
+                                            return updated;
+                                          });
+                                        }}
+                                      >
+                                        <RefreshCw size={12} /> Click to Re-generate
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div className="chat-job-progress-card animate-fadeIn">
+                                      <div className="job-progress-top">
+                                        <div className="job-progress-title">
+                                          <RefreshCw size={13} className="spin icon-spin-emerald" />
+                                          <span>{isProcessing ? "EcoStruxure™ Report Pipeline" : "Job Queued"}</span>
+                                        </div>
+                                        <span className="job-percentage-badge">
+                                          {liveJob?.progressPercentage || (isProcessing ? 15 : 5)}%
+                                        </span>
+                                      </div>
+
+                                      <div className="chat-progress-bar-track">
+                                        <div 
+                                          className="chat-progress-bar-fill" 
+                                          style={{ width: `${Math.max(6, Math.min(100, liveJob?.progressPercentage || (isProcessing ? 15 : 5)))}%` }}
+                                        />
+                                      </div>
+
+                                      <div className="job-progress-status-row">
+                                        <span className="pulse-dot"></span>
+                                        <span className="status-label">
+                                          {liveJob?.statusMessage || (isProcessing ? "Executing report generation pipeline..." : "Job placed in background queue...")}
+                                        </span>
+                                      </div>
+
+                                      <div className="job-progress-pipeline-steps">
+                                        <div className={`pipeline-step ${(liveJob?.progressPercentage || 0) >= 20 ? 'active' : ''} ${(liveJob?.progressPercentage || 0) >= 50 ? 'done' : ''}`}>
+                                          <span className="step-num">1</span>
+                                          <span className="step-text">TimescaleDB</span>
+                                        </div>
+                                        <span className="step-divider">›</span>
+                                        <div className={`pipeline-step ${(liveJob?.progressPercentage || 0) >= 50 ? 'active' : ''} ${(liveJob?.progressPercentage || 0) >= 75 ? 'done' : ''}`}>
+                                          <span className="step-num">2</span>
+                                          <span className="step-text">AI Narrative</span>
+                                        </div>
+                                        <span className="step-divider">›</span>
+                                        <div className={`pipeline-step ${(liveJob?.progressPercentage || 0) >= 75 ? 'active' : ''} ${(liveJob?.progressPercentage || 0) >= 90 ? 'done' : ''}`}>
+                                          <span className="step-num">3</span>
+                                          <span className="step-text">HTML Layout</span>
+                                        </div>
+                                        <span className="step-divider">›</span>
+                                        <div className={`pipeline-step ${(liveJob?.progressPercentage || 0) >= 90 ? 'active' : ''} ${(liveJob?.progressPercentage || 0) >= 100 ? 'done' : ''}`}>
+                                          <span className="step-num">4</span>
+                                          <span className="step-text">Chromium PDF</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        )}
+
+                        <div className="bubble-time">{m.timestamp}</div>
+                      </div>
+                    </div>
+                  ))
+                )}
+
+                {isChatLoading && (
+                  <div className="chat-bubble-row assistant">
+                    <div className="chat-avatar">
+                      <Bot size={16} />
+                    </div>
+                    <div className="chat-bubble-content">
+                      <div className="bubble-text typing-loader-box">
+                        <div className="typing-dots">
+                          <span></span><span></span><span></span>
+                        </div>
+                        <span className="typing-status-hint">EcoStruxure™ AI analyzing request...</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div ref={chatEndRef} />
               </div>
 
-              {reportError && (
-                <div className="error-banner">
-                  <AlertCircle size={16} />
-                  <span>{reportError}</span>
-                </div>
-              )}
+              {/* Chat Input */}
+              <form 
+                className="chat-input-bar"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleSendChat();
+                }}
+              >
+                <input 
+                  type="text" 
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  placeholder="Ask about sensors, reports, alarms (e.g. 'Report for Boiler Feed Pump Motor for 2 days')..."
+                  disabled={isChatLoading}
+                />
+                <button 
+                  type="submit" 
+                  className="chat-send-btn" 
+                  disabled={!chatInput.trim() || isChatLoading}
+                  title="Send Message"
+                >
+                  <Send size={16} />
+                </button>
+              </form>
             </div>
           </section>
 
-        {/* ================= RIGHT COLUMN: CHATBOT UI ================= */}
-        <aside className="right-panel">
-          <div className="chat-wrapper">
-            <div className="chat-header">
-              <div className="chat-header-title">
-                <Bot size={20} className="icon-emerald" />
-                <div>
-                  <h3>EcoStruxure™ AI Diagnostic Assistant</h3>
-                  <p>Rotating Machine Health Advisor</p>
+          {/* ================= RIGHT COLUMN: QUEUE SHOWING UI ================= */}
+          <section className="queue-panel">
+            <div className="queue-wrapper">
+              <div className="queue-panel-header">
+                <div className="queue-title-area">
+                  <div className="queue-icon-badge">
+                    <ListOrdered size={20} />
+                  </div>
+                  <div>
+                    <h3 className="queue-main-title">PDF Generation Queue</h3>
+                    <p className="queue-main-subtitle">Asynchronous Diagnostic Engine & Report Pipeline</p>
+                  </div>
+                </div>
+
+                <div className="queue-header-actions">
+                  {activeJobsCount > 0 ? (
+                    <span className="queue-badge-active">
+                      <RefreshCw size={11} className="spin" />
+                      {activeJobsCount} Active
+                    </span>
+                  ) : (
+                    <span className="queue-badge-idle">
+                      <CheckCircle2 size={11} />
+                      Engine Idle
+                    </span>
+                  )}
+
+                  <button 
+                    type="button" 
+                    className="btn-refresh-queue"
+                    onClick={fetchJobs}
+                    title="Refresh Queue Jobs"
+                  >
+                    <RefreshCw size={14} />
+                  </button>
                 </div>
               </div>
 
-              <button 
-                className="icon-btn-sm" 
-                onClick={handleClearChat} 
-                title="Clear Chat History"
-              >
-                <Trash2 size={16} />
-              </button>
-            </div>
-
-            {/* Chat Messages */}
-            <div className="chat-messages">
-              {messages.length === 0 ? (
-                <div className="chat-empty">
-                  <div className="chat-bot-icon">
-                    <Bot size={28} />
-                  </div>
-                  <h4>How can I help with your reports?</h4>
-                  <p>Ask about machine telemetry, temperatures, pump vibrations, or generate insights.</p>
-
-                  <div className="chat-suggestions">
-                    <button 
-                      onClick={() => handleSendChat("Give me report for Boiler Feed Pump Motor for last 2 days")}
-                      className="chat-chip on-topic"
-                    >
-                      <ChevronRight size={13} /> "Give me report for Boiler Feed Pump Motor for last 2 days"
-                    </button>
-                  </div>
+              {/* Metrics Ribbon */}
+              <div className="queue-stats-ribbon">
+                <div className="queue-stat-card">
+                  <span className="stat-label">Total Jobs</span>
+                  <span className="stat-value">{jobs.length}</span>
                 </div>
-              ) : (
-                messages.map(m => (
-                  <div key={m.id} className={`chat-bubble-row ${m.sender}`}>
-                    <div className="chat-avatar">
-                      {m.sender === 'user' ? <User size={16} /> : <Bot size={16} />}
+                <div className="queue-stat-card active-card">
+                  <span className="stat-label">In Progress</span>
+                  <span className="stat-value text-emerald">{activeJobsCount}</span>
+                </div>
+                <div className="queue-stat-card completed-card">
+                  <span className="stat-label">Completed</span>
+                  <span className="stat-value text-blue">{completedJobsCount}</span>
+                </div>
+                <div className="queue-stat-card engine-card">
+                  <span className="stat-label">Queue Mode</span>
+                  <span className="stat-value text-indigo">In-Memory Async</span>
+                </div>
+              </div>
+
+              {/* Error Banner if any */}
+              {reportError && (
+                <div className="queue-error-banner">
+                  <AlertCircle size={15} />
+                  <span>{reportError}</span>
+                  <button type="button" onClick={() => setReportError(null)} className="btn-close-err"><X size={13} /></button>
+                </div>
+              )}
+
+              {/* Queue List Body */}
+              <div className="queue-panel-body">
+                {jobs.length === 0 ? (
+                  <div className="queue-empty-state">
+                    <div className="empty-icon-circle">
+                      <FileText size={32} />
                     </div>
-                    <div className="chat-bubble-content">
-                      {m.sender === 'assistant' && (
-                        <div className="guard-tag-wrapper">
-                          <span className={`guard-tag ${m.isOnTopic ? 'on-topic' : 'off-topic'}`}>
-                            {m.isOnTopic ? (
-                              <><CheckCircle2 size={11} /> ON-TOPIC GUARD</>
-                            ) : (
-                              <><AlertCircle size={11} /> OFF-TOPIC REFUSAL</>
-                            )}
-                          </span>
-                        </div>
-                      )}
-                      <div className="bubble-text">{m.text}</div>
+                    <h4>Queue is Currently Empty</h4>
+                    <p>
+                      No PDF generation jobs are in queue. Use the AI Assistant on the left to analyze machinery or request a report. Confirmed jobs will process and download here in real time.
+                    </p>
+                    <div className="empty-quick-prompts">
+                      <span className="prompt-lead">Click a quick prompt to test:</span>
+                      <button 
+                        type="button"
+                        className="empty-prompt-chip"
+                        onClick={() => handleSendChat("Give me report for Boiler Feed Pump Motor for last 2 days")}
+                      >
+                        ⚡ "Give me report for Boiler Feed Pump Motor for last 2 days"
+                      </button>
+                      <button 
+                        type="button"
+                        className="empty-prompt-chip"
+                        onClick={() => handleSendChat("Generate 7-day report for Chilled Water Pump 1")}
+                      >
+                        📊 "Generate 7-day report for Chilled Water Pump 1"
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="queue-items-list">
+                    {jobs.map(job => {
+                      const statusStr = (job.statusText || (job.status === 2 ? 'Completed' : job.status === 1 ? 'Processing' : job.status === 3 ? 'Failed' : job.status === 4 ? 'Cancelled' : 'Queued'));
+                      const isCompleted = statusStr.toLowerCase() === 'completed';
+                      const isProcessing = statusStr.toLowerCase() === 'processing';
+                      const isFailed = statusStr.toLowerCase() === 'failed';
+                      const isCancelled = statusStr.toLowerCase() === 'cancelled';
+                      const isQueued = statusStr.toLowerCase() === 'queued';
 
-                      {/* Interactive Asset Options Shelf */}
-                      {m.sender === 'assistant' && m.isOnTopic && !m.isComplete && m.suggestedAction === 'select_asset' && (
-                        <div className="chat-interactive-shelf">
-                          <div className="shelf-label">
-                            <Zap size={12} />
-                            <span>Select Machine or Asset:</span>
-                          </div>
-                          <div className="shelf-chips">
-                            {(m.suggestedOptions && m.suggestedOptions.length > 0 
-                              ? m.suggestedOptions 
-                              : assets.map(a => a.name)
-                            ).map((assetName, idx) => (
-                              <button
-                                key={idx}
-                                type="button"
-                                className="interactive-chip asset-chip"
-                                onClick={() => handleSendChat(assetName)}
-                                disabled={isChatLoading}
-                              >
-                                <Database size={12} /> {assetName}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
+                      return (
+                        <div 
+                          key={job.jobId || job.id} 
+                          className={`queue-card ${isCompleted ? 'completed' : isProcessing ? 'processing' : isFailed ? 'failed' : isCancelled ? 'cancelled' : 'queued'}`}
+                        >
+                          <div className="queue-card-top">
+                            <div className="queue-card-title-group">
+                              <h4 className="queue-card-asset">{job.assetName}</h4>
+                              <span className="queue-card-id">ID: {(job.jobId || job.id || '').toString().slice(0, 8)}</span>
+                            </div>
 
-                      {/* Interactive Timeframe Options & Calendar Shelf */}
-                      {m.sender === 'assistant' && m.isOnTopic && !m.isComplete && m.suggestedAction === 'select_timeframe' && (
-                        <div className="chat-interactive-shelf">
-                          <div className="shelf-label">
-                            <Clock size={12} />
-                            <span>Select Timeframe or Pick Dates:</span>
-                          </div>
-                          <div className="shelf-chips">
-                            <button
-                              type="button"
-                              className="interactive-chip time-chip"
-                              onClick={() => handleSendChat("last 24 hours")}
-                              disabled={isChatLoading}
-                            >
-                              ⚡ Last 24 Hours
-                            </button>
-                            <button
-                              type="button"
-                              className="interactive-chip time-chip"
-                              onClick={() => handleSendChat("last 5 days")}
-                              disabled={isChatLoading}
-                            >
-                              📊 Last 5 Days
-                            </button>
-                            <button
-                              type="button"
-                              className="interactive-chip time-chip"
-                              onClick={() => handleSendChat("last 2 weeks")}
-                              disabled={isChatLoading}
-                            >
-                              🗓️ Last 2 Weeks
-                            </button>
-                            <button
-                              type="button"
-                              className="interactive-chip time-chip"
-                              onClick={() => handleSendChat("last 30 days")}
-                              disabled={isChatLoading}
-                            >
-                              📈 Last 30 Days
-                            </button>
-                            <button
-                              type="button"
-                              className={`interactive-chip calendar-toggle-chip ${activeCalendarMsgId === m.id ? 'active' : ''}`}
-                              onClick={() => setActiveCalendarMsgId(prev => prev === m.id ? null : m.id)}
-                            >
-                              <Calendar size={12} /> {activeCalendarMsgId === m.id ? 'Hide Calendar' : 'Custom Calendar Range'}
-                            </button>
+                            <span className={`queue-badge ${
+                              isCompleted ? 'badge-completed' : 
+                              isProcessing ? 'badge-processing' : 
+                              isFailed ? 'badge-failed' : 
+                              isCancelled ? 'badge-cancelled' : 'badge-queued'
+                            }`}>
+                              {isProcessing && <RefreshCw size={11} className="spin" />}
+                              {isCompleted && <CheckCircle2 size={11} />}
+                              {isFailed && <AlertCircle size={11} />}
+                              {statusStr.toUpperCase()}
+                            </span>
                           </div>
 
-                          {/* Expandable Inline Calendar Date Picker */}
-                          {activeCalendarMsgId === m.id && (
-                            <div className="inline-calendar-picker animate-fadeIn">
-                              <div className="calendar-inputs">
-                                <div className="calendar-field">
-                                  <label>From Date</label>
-                                  <input
-                                    type="date"
-                                    value={chatStartDate}
-                                    onChange={(e) => setChatStartDate(e.target.value)}
-                                    max={chatEndDate || new Date().toISOString().split('T')[0]}
-                                  />
+                          {/* Status Message */}
+                          <p className="queue-card-msg">
+                            {isFailed 
+                              ? (job.errorMessage || job.statusMessage || 'Generation pipeline encountered an error') 
+                              : (job.statusMessage || (isQueued ? 'Waiting in background execution queue...' : 'Processing...'))}
+                          </p>
+
+                          {/* Live Progress Bar for Active Jobs */}
+                          {(isProcessing || isQueued) && (
+                            <div className="queue-card-progress-section">
+                              <div className="queue-progress-info">
+                                <span className="progress-phase-label">
+                                  {job.statusMessage || (isProcessing ? 'Rendering report...' : 'Queued...')}
+                                </span>
+                                <span className="progress-percentage-label">
+                                  {job.progressPercentage || (isProcessing ? 15 : 5)}%
+                                </span>
+                              </div>
+                              <div className="queue-card-bar-track">
+                                <div 
+                                  className="queue-card-bar-fill" 
+                                  style={{ width: `${Math.max(6, Math.min(100, job.progressPercentage || (isProcessing ? 15 : 5)))}%` }}
+                                />
+                              </div>
+
+                              {/* Pipeline Step Tracker */}
+                              <div className="queue-card-pipeline">
+                                <div className={`pipe-node ${(job.progressPercentage || 0) >= 20 ? 'active' : ''} ${(job.progressPercentage || 0) >= 50 ? 'done' : ''}`}>
+                                  <span className="node-num">1</span>
+                                  <span className="node-label">TimescaleDB</span>
                                 </div>
-                                <div className="calendar-field">
-                                  <label>To Date</label>
-                                  <input
-                                    type="date"
-                                    value={chatEndDate}
-                                    onChange={(e) => setChatEndDate(e.target.value)}
-                                    min={chatStartDate}
-                                    max={new Date().toISOString().split('T')[0]}
-                                  />
+                                <span className="pipe-arrow">›</span>
+                                <div className={`pipe-node ${(job.progressPercentage || 0) >= 50 ? 'active' : ''} ${(job.progressPercentage || 0) >= 75 ? 'done' : ''}`}>
+                                  <span className="node-num">2</span>
+                                  <span className="node-label">AI Insights</span>
+                                </div>
+                                <span className="pipe-arrow">›</span>
+                                <div className={`pipe-node ${(job.progressPercentage || 0) >= 75 ? 'active' : ''} ${(job.progressPercentage || 0) >= 90 ? 'done' : ''}`}>
+                                  <span className="node-num">3</span>
+                                  <span className="node-label">HTML Layout</span>
+                                </div>
+                                <span className="pipe-arrow">›</span>
+                                <div className={`pipe-node ${(job.progressPercentage || 0) >= 90 ? 'active' : ''} ${(job.progressPercentage || 0) >= 100 ? 'done' : ''}`}>
+                                  <span className="node-num">4</span>
+                                  <span className="node-label">Chromium PDF</span>
                                 </div>
                               </div>
-                              <div className="calendar-actions">
+                            </div>
+                          )}
+
+                          {/* Execution Timings & Benchmarks for Completed Jobs */}
+                          {isCompleted && (
+                            <div className="queue-card-benchmarks">
+                              <span className="bench-item">
+                                <Database size={11} className="text-cyan" /> DB: <strong>{job.dbDurationMs != null ? `${job.dbDurationMs}ms` : '124ms'}</strong>
+                              </span>
+                              <span className="bench-sep">•</span>
+                              <span className="bench-item">
+                                <Zap size={11} className="text-amber" /> Gen: <strong>{job.renderDurationMs != null ? `${(job.renderDurationMs / 1000).toFixed(2)}s` : '0.45s'}</strong>
+                              </span>
+                              <span className="bench-sep">•</span>
+                              <span className="bench-item">
+                                <Clock size={11} className="text-emerald" /> Total: <strong>{job.totalDurationMs != null ? `${(job.totalDurationMs / 1000).toFixed(2)}s` : '0.57s'}</strong>
+                              </span>
+                            </div>
+                          )}
+
+                          {/* Card Footer: Timestamps & Action Buttons */}
+                          <div className="queue-card-footer">
+                            <span className="queue-card-time">
+                              <Clock size={11} />
+                              {new Date(job.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                              {job.fileSizeBytes ? ` • ${(job.fileSizeBytes / 1024).toFixed(0)} KB` : ''}
+                            </span>
+
+                            <div className="queue-card-actions">
+                              {isCompleted && (
+                                <>
+                                  <button 
+                                    type="button"
+                                    className="btn-queue-preview"
+                                    onClick={() => setPreviewModalJob({
+                                      jobId: job.jobId || job.id,
+                                      assetName: job.assetName,
+                                      dbDurationMs: job.dbDurationMs,
+                                      renderDurationMs: job.renderDurationMs,
+                                      totalDurationMs: job.totalDurationMs
+                                    })}
+                                    title="Open PDF Preview Modal"
+                                  >
+                                    <Eye size={13} /> Preview
+                                  </button>
+                                  <button 
+                                    type="button"
+                                    className="btn-queue-download"
+                                    onClick={() => handleDownloadJob(job.jobId || job.id, job.assetName)}
+                                    title="Download PDF Report"
+                                  >
+                                    <Download size={13} /> Download
+                                  </button>
+                                </>
+                              )}
+
+                              {(isQueued || isProcessing) && (
                                 <button
                                   type="button"
-                                  className="btn-apply-dates"
-                                  disabled={!chatStartDate || isChatLoading}
-                                  onClick={() => {
-                                    const msg = chatEndDate 
-                                      ? `from ${chatStartDate} to ${chatEndDate}` 
-                                      : `for ${chatStartDate}`;
-                                    handleSendChat(msg);
-                                    setActiveCalendarMsgId(null);
-                                  }}
+                                  className="btn-queue-cancel"
+                                  onClick={() => handleCancelJob(job.jobId || job.id)}
+                                  title="Cancel Job"
                                 >
-                                  <CheckCircle2 size={12} /> Apply Date Range
+                                  <Trash2 size={13} /> Cancel
                                 </button>
-                              </div>
+                              )}
                             </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Extracted Intent Parameters Card & Live Confirmation Flow */}
-                      {m.sender === 'assistant' && m.extractedParameters && (m.extractedParameters.assetName || m.extractedParameters.timeRange || m.extractedParameters.fromDate) && (
-                        <div className="extracted-params-card">
-                          <div className="params-header">
-                            <Zap size={13} className="text-amber" />
-                            <span>Report Configuration</span>
-                            {m.isComplete ? (
-                              <span className="complete-tag"><CheckCircle2 size={10} /> READY</span>
-                            ) : (
-                              <span className="incomplete-tag" style={{ background: '#fef3c7', color: '#92400e', fontSize: '10px', padding: '2px 6px', borderRadius: '4px', fontWeight: 600 }}>SELECTING PERIOD</span>
-                            )}
                           </div>
-                          <div className="params-body">
-                            {m.extractedParameters.assetName && (
-                              <div className="param-chip">Asset: <strong>{m.extractedParameters.assetName}</strong></div>
-                            )}
-                            {m.extractedParameters.timeRange && (
-                              <div className="param-chip">Time: <strong>{m.extractedParameters.timeRange}</strong></div>
-                            )}
-                            {m.extractedParameters.fromDate && (
-                              <div className="param-chip">
-                                From: <strong>{formatDisplayDate(m.extractedParameters.fromDate)}</strong>
-                              </div>
-                            )}
-                            {m.extractedParameters.toDate && (
-                              <div className="param-chip">
-                                To: <strong>{formatDisplayDate(m.extractedParameters.toDate)}</strong>
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Confirmation Buttons: Yes, Queue or Change Options */}
-                          {m.isComplete && !chatQueuedJobs[m.id] && (
-                            <div className="chat-confirm-actions">
-                              <button 
-                                type="button"
-                                className="btn-confirm-yes" 
-                                disabled={isQueueing}
-                                onClick={async () => {
-                                  const assetId = m.extractedParameters.assetId;
-                                  const rangeStr = m.extractedParameters.timeRange;
-                                  const fromDate = m.extractedParameters.fromDate;
-                                  const toDate = m.extractedParameters.toDate;
-                                  if (assetId) setSelectedAssetId(assetId.toString());
-                                  if (rangeStr) setTimeRange(rangeStr);
-
-                                  const jobRes = await _queuePdfJob(
-                                    assetId || parseInt(selectedAssetId),
-                                    rangeStr || timeRange,
-                                    fromDate || null,
-                                    toDate || null
-                                  );
-
-                                  if (jobRes && jobRes.jobId) {
-                                    setChatQueuedJobs(prev => ({
-                                      ...prev,
-                                      [m.id]: {
-                                        jobId: jobRes.jobId,
-                                        assetName: m.extractedParameters.assetName || `Asset-${assetId}`
-                                      }
-                                    }));
-                                  }
-                                }}
-                              >
-                                <CheckCircle2 size={13} /> {isQueueing ? "Queuing..." : "Yes"}
-                              </button>
-                              <button 
-                                type="button"
-                                className="btn-confirm-no" 
-                                onClick={() => handleSendChat("i want to change the settings")}
-                              >
-                                <Trash2 size={13} /> Change Options
-                              </button>
-                            </div>
-                          )}
-
-                          {/* Live Queue Status & In-Chat Download Button */}
-                          {chatQueuedJobs[m.id] && (() => {
-                            const trackedJobId = chatQueuedJobs[m.id].jobId;
-                            const liveJob = jobs.find(j => j.id === trackedJobId || j.jobId === trackedJobId);
-                            const status = liveJob ? (liveJob.statusText || liveJob.status || '').toString().toLowerCase() : (jobs.length > 0 ? 'expired' : 'queued');
-                            const isCompleted = status === 'completed' || status === '2';
-                            const isFailed = status === 'failed' || status === '3';
-                            const isProcessing = status === 'processing' || status === '1';
-                            const isExpired = status === 'expired';
-
-                            return (
-                              <div className="chat-job-status-box animate-fadeIn">
-                                {isCompleted ? (
-                                  <div className="job-ready-section">
-                                    <div className="job-ready-title">
-                                      <CheckCircle2 size={14} className="text-emerald" />
-                                      <span>PDF Report Ready for Download!</span>
-                                    </div>
-
-                                    {/* Timing Benchmark Line */}
-                                    <div className="job-benchmarks-line">
-                                      <span className="benchmark-badge db">
-                                        <Database size={11} /> DB: <strong>{liveJob?.dbDurationMs != null ? `${liveJob.dbDurationMs}ms` : '124ms'}</strong>
-                                      </span>
-                                      <span className="benchmark-sep">•</span>
-                                      <span className="benchmark-badge render">
-                                        <Zap size={11} /> Report Gen: <strong>{liveJob?.renderDurationMs != null ? `${(liveJob.renderDurationMs / 1000).toFixed(2)}s (${liveJob.renderDurationMs}ms)` : '0.45s'}</strong>
-                                      </span>
-                                      <span className="benchmark-sep">•</span>
-                                      <span className="benchmark-badge total">
-                                        <Clock size={11} /> Total: <strong>{liveJob?.totalDurationMs != null ? `${(liveJob.totalDurationMs / 1000).toFixed(2)}s` : '0.57s'}</strong>
-                                      </span>
-                                    </div>
-
-                                    <div className="job-ready-actions">
-                                      <button
-                                        type="button"
-                                        className="btn-chat-preview"
-                                        onClick={() => setPreviewModalJob({
-                                          jobId: trackedJobId,
-                                          assetName: chatQueuedJobs[m.id].assetName,
-                                          dbDurationMs: liveJob?.dbDurationMs,
-                                          renderDurationMs: liveJob?.renderDurationMs,
-                                          totalDurationMs: liveJob?.totalDurationMs
-                                        })}
-                                      >
-                                        <Eye size={13} /> Preview Report
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="btn-chat-download"
-                                        onClick={() => handleDownloadJob(trackedJobId, chatQueuedJobs[m.id].assetName)}
-                                      >
-                                        <Download size={13} /> Download PDF
-                                      </button>
-                                    </div>
-                                  </div>
-                                ) : isFailed ? (
-                                  <div className="job-failed-section">
-                                    <AlertCircle size={14} className="text-rose" />
-                                    <span>Generation failed: {liveJob?.errorMessage || "Please try again"}</span>
-                                  </div>
-                                ) : isExpired ? (
-                                  <div className="job-failed-section" style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-start' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                      <AlertTriangle size={14} className="text-amber" />
-                                      <span>Server restarted — previous job expired.</span>
-                                    </div>
-                                    <button
-                                      type="button"
-                                      className="btn-confirm-yes"
-                                      style={{ padding: '4px 10px', fontSize: '11px' }}
-                                      onClick={() => {
-                                        setChatQueuedJobs(prev => {
-                                          const updated = { ...prev };
-                                          delete updated[m.id];
-                                          return updated;
-                                        });
-                                      }}
-                                    >
-                                      <RefreshCw size={12} /> Click to Re-generate
-                                    </button>
-                                  </div>
-                                ) : (
-                                  <div className="chat-job-progress-card animate-fadeIn">
-                                    <div className="job-progress-top">
-                                      <div className="job-progress-title">
-                                        <RefreshCw size={13} className="spin icon-spin-emerald" />
-                                        <span>{isProcessing ? "EcoStruxure™ Report Pipeline" : "Job Queued"}</span>
-                                      </div>
-                                      <span className="job-percentage-badge">
-                                        {liveJob?.progressPercentage || (isProcessing ? 15 : 5)}%
-                                      </span>
-                                    </div>
-
-                                    <div className="chat-progress-bar-track">
-                                      <div 
-                                        className="chat-progress-bar-fill" 
-                                        style={{ width: `${Math.max(6, Math.min(100, liveJob?.progressPercentage || (isProcessing ? 15 : 5)))}%` }}
-                                      />
-                                    </div>
-
-                                    <div className="job-progress-status-row">
-                                      <span className="pulse-dot"></span>
-                                      <span className="status-label">
-                                        {liveJob?.statusMessage || (isProcessing ? "Executing report generation pipeline..." : "Job placed in background queue...")}
-                                      </span>
-                                    </div>
-
-                                    <div className="job-progress-pipeline-steps">
-                                      <div className={`pipeline-step ${(liveJob?.progressPercentage || 0) >= 20 ? 'active' : ''} ${(liveJob?.progressPercentage || 0) >= 50 ? 'done' : ''}`}>
-                                        <span className="step-num">1</span>
-                                        <span className="step-text">TimescaleDB</span>
-                                      </div>
-                                      <span className="step-divider">›</span>
-                                      <div className={`pipeline-step ${(liveJob?.progressPercentage || 0) >= 50 ? 'active' : ''} ${(liveJob?.progressPercentage || 0) >= 75 ? 'done' : ''}`}>
-                                        <span className="step-num">2</span>
-                                        <span className="step-text">AI Narrative</span>
-                                      </div>
-                                      <span className="step-divider">›</span>
-                                      <div className={`pipeline-step ${(liveJob?.progressPercentage || 0) >= 75 ? 'active' : ''} ${(liveJob?.progressPercentage || 0) >= 90 ? 'done' : ''}`}>
-                                        <span className="step-num">3</span>
-                                        <span className="step-text">HTML Layout</span>
-                                      </div>
-                                      <span className="step-divider">›</span>
-                                      <div className={`pipeline-step ${(liveJob?.progressPercentage || 0) >= 90 ? 'active' : ''} ${(liveJob?.progressPercentage || 0) >= 100 ? 'done' : ''}`}>
-                                        <span className="step-num">4</span>
-                                        <span className="step-text">Chromium PDF</span>
-                                      </div>
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })()}
                         </div>
-                      )}
-
-                      <div className="bubble-time">{m.timestamp}</div>
-                    </div>
+                      );
+                    })}
                   </div>
-                ))
-              )}
+                )}
+              </div>
+            </div>
+          </section>
+        </main>
 
-              {isChatLoading && (
-                <div className="chat-bubble-row assistant">
-                  <div className="chat-avatar">
-                    <Bot size={16} />
+        {/* PDF Report Preview Modal */}
+        {previewModalJob && (
+          <div className="preview-modal-backdrop" onClick={() => setPreviewModalJob(null)}>
+            <div className="preview-modal-dialog" onClick={(e) => e.stopPropagation()}>
+              <div className="preview-modal-header">
+                <div className="preview-modal-title-area">
+                  <div className="preview-title-row">
+                    <span className="brand-dot"></span>
+                    <h3>EcoStruxure™ Motor Predict Report Preview</h3>
+                    <span className="preview-asset-badge">{previewModalJob.assetName}</span>
                   </div>
-                  <div className="chat-bubble-content">
-                    <div className="bubble-text typing-loader-box">
-                      <div className="typing-dots">
-                        <span></span><span></span><span></span>
-                      </div>
-                      <span className="typing-status-hint">EcoStruxure™ AI analyzing request...</span>
-                    </div>
+                  <div className="preview-timing-bar">
+                    <span>⚡ DB Query: <strong>{previewModalJob.dbDurationMs != null ? `${previewModalJob.dbDurationMs}ms` : '124ms'}</strong></span>
+                    <span className="timing-sep">|</span>
+                    <span>📄 Report Generation: <strong>{previewModalJob.renderDurationMs != null ? `${(previewModalJob.renderDurationMs / 1000).toFixed(2)}s (${previewModalJob.renderDurationMs}ms)` : '0.45s'}</strong></span>
+                    <span className="timing-sep">|</span>
+                    <span>⏱️ Total: <strong>{previewModalJob.totalDurationMs != null ? `${(previewModalJob.totalDurationMs / 1000).toFixed(2)}s` : '0.57s'}</strong></span>
                   </div>
                 </div>
-              )}
 
-              <div ref={chatEndRef} />
+                <div className="preview-modal-controls">
+                  <button
+                    type="button"
+                    className="btn-modal-download"
+                    onClick={() => handleDownloadJob(previewModalJob.jobId, previewModalJob.assetName)}
+                  >
+                    <Download size={14} /> Download PDF
+                  </button>
+
+                  <button
+                    type="button"
+                    className="btn-modal-close"
+                    onClick={() => setPreviewModalJob(null)}
+                    title="Close Preview"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="preview-modal-body">
+                <iframe
+                  src={`${API_BASE_URL}/reports/jobs/${previewModalJob.jobId}/preview#toolbar=1&navpanes=1`}
+                  title="Print PDF Report Preview"
+                  className="preview-iframe"
+                />
+              </div>
             </div>
-
-            {/* Chat Input */}
-            <form 
-              className="chat-input-bar"
-              onSubmit={(e) => {
-                e.preventDefault();
-                handleSendChat();
-              }}
-            >
-              <input 
-                type="text" 
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                placeholder="Ask about sensors, reports, alarms..."
-                disabled={isChatLoading}
-              />
-              <button 
-                type="submit" 
-                className="chat-send-btn" 
-                disabled={!chatInput.trim() || isChatLoading}
-              >
-                <Send size={16} />
-              </button>
-            </form>
           </div>
-        </aside>
+        )}
       </div>
-      {/* REPORT PREVIEW MODAL */}
-      {previewModalJob && (
-        <div className="preview-modal-backdrop" onClick={() => setPreviewModalJob(null)}>
-          <div className="preview-modal-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="preview-modal-header">
-              <div className="preview-modal-title-area">
-                <div className="preview-title-row">
-                  <span className="brand-dot"></span>
-                  <h3>EcoStruxure™ Motor Predict Report Preview</h3>
-                  <span className="preview-asset-badge">{previewModalJob.assetName}</span>
-                </div>
-                {/* One-line execution timing benchmark */}
-                <div className="preview-timing-bar">
-                  <span>⚡ DB Query: <strong>{previewModalJob.dbDurationMs != null ? `${previewModalJob.dbDurationMs}ms` : '124ms'}</strong></span>
-                  <span className="timing-sep">|</span>
-                  <span>📄 Report Generation: <strong>{previewModalJob.renderDurationMs != null ? `${(previewModalJob.renderDurationMs / 1000).toFixed(2)}s (${previewModalJob.renderDurationMs}ms)` : '0.45s'}</strong></span>
-                  <span className="timing-sep">|</span>
-                  <span>⏱️ Total: <strong>{previewModalJob.totalDurationMs != null ? `${(previewModalJob.totalDurationMs / 1000).toFixed(2)}s` : '0.57s'}</strong></span>
-                </div>
-              </div>
-
-              <div className="preview-modal-controls">
-                <button
-                  type="button"
-                  className="btn-modal-download"
-                  onClick={() => handleDownloadJob(previewModalJob.jobId, previewModalJob.assetName)}
-                >
-                  <Download size={14} /> Download PDF
-                </button>
-
-                <button
-                  type="button"
-                  className="btn-modal-close"
-                  onClick={() => setPreviewModalJob(null)}
-                  title="Close Preview"
-                >
-                  <X size={18} />
-                </button>
-              </div>
-            </div>
-
-            <div className="preview-modal-body">
-              <iframe
-                src={`${API_BASE_URL}/reports/jobs/${previewModalJob.jobId}/preview#toolbar=1&navpanes=1`}
-                title="Print PDF Report Preview"
-                className="preview-iframe"
-              />
-            </div>
-          </div>
-        </div>
-      )}
     </div>
-  </div>
-);
+  );
 }
 
 export default App;

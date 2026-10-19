@@ -35,7 +35,8 @@ public static class ChatResponseSynchronizer
     public static SyncedTurn Sync(
         LlmChatReplyDto raw,
         ExtractedReportParametersDto? previous,
-        IReadOnlyList<AssetDto> assets)
+        IReadOnlyList<AssetDto> assets,
+        string? userMessage = null)
     {
         var prev = previous?.Clone() ?? new ExtractedReportParametersDto();
         string? llmAction = NormalizeAction(raw.SuggestedAction);
@@ -60,7 +61,7 @@ public static class ChatResponseSynchronizer
             asset = null;
 
         // ---- Timeframe ---------------------------------------------------------------------
-        var (timeRange, fromDate, toDate, timeProblem) = ResolveTime(p);
+        var (timeRange, fromDate, toDate, timeProblem) = ResolveTime(p, userMessage);
         problem ??= timeProblem;
 
         bool timeUnchanged = timeRange == prev.TimeRange && fromDate == prev.FromDate && toDate == prev.ToDate;
@@ -150,9 +151,22 @@ public static class ChatResponseSynchronizer
         return null;
     }
 
-    private static (string? TimeRange, string? FromDate, string? ToDate, string? Problem) ResolveTime(ExtractedReportParametersDto p)
+    private static (string? TimeRange, string? FromDate, string? ToDate, string? Problem) ResolveTime(
+        ExtractedReportParametersDto p,
+        string? userMessage = null)
     {
-        // Absolute dates take precedence
+        // 1. If user message explicitly specifies a relative timeframe (e.g. "16 days", "last 2 days", "24h"),
+        // C#'s deterministic regex TimeframeParser takes absolute precedence over LLM calendar hallucinations!
+        if (!string.IsNullOrWhiteSpace(userMessage))
+        {
+            var userTf = TimeframeParser.Parse(userMessage, allowBareNumber: true);
+            if (userTf.TimeRange != null)
+            {
+                return (userTf.TimeRange, null, null, null);
+            }
+        }
+
+        // 2. Absolute dates take precedence
         if (!string.IsNullOrWhiteSpace(p.FromDate))
         {
             if (TryParseUtc(p.FromDate, out var from))
@@ -161,7 +175,12 @@ public static class ChatResponseSynchronizer
                 if (!string.IsNullOrWhiteSpace(p.ToDate) && TryParseUtc(p.ToDate, out var parsedTo)) to = parsedTo;
                 if (to.HasValue && to.Value < from) (from, to) = (to.Value, from);
 
-                var end = to ?? DateTime.UtcNow;
+                var now = DateTime.UtcNow;
+                // Guard: Telemetry reports cannot be in the future
+                if (to.HasValue && to.Value > now) to = now;
+                if (from > now) from = now.AddDays(-1);
+
+                var end = to ?? now;
                 if ((end - from).TotalDays > TimeframeParser.MaxDays)
                     return (null, null, null,
                         $"The requested date range is longer than {TimeframeParser.MaxDays} days, which is the maximum. Explain this and ask for a shorter range.");
@@ -192,4 +211,5 @@ public static class ChatResponseSynchronizer
             DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out utc);
 
     private static string Iso(DateTime dt) => dt.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
+
 }
