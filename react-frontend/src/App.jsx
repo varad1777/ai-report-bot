@@ -29,7 +29,7 @@ const getBackendHost = () => {
     // so API and WebSockets automatically route through the frontend proxy to backend
     return window.location.origin;
   }
-  return 'http://localhost:5000';
+  return 'http://localhost:5500';
 };
 const BACKEND_URL = getBackendHost();
 const API_BASE_URL = `${BACKEND_URL}/api`;
@@ -61,6 +61,9 @@ function App() {
 
   // Report Preview Modal State
   const [previewModalJob, setPreviewModalJob] = useState(null);
+
+  // Active AI Model State
+  const [modelInfo, setModelInfo] = useState(null);
 
   const chatEndRef = useRef(null);
   const hubConnectionRef = useRef(null);
@@ -127,6 +130,7 @@ function App() {
 
     fetchAssets();
     fetchJobs();
+    fetchModelInfo();
   }, []);
 
   // Persist messages to localStorage whenever they change
@@ -339,7 +343,7 @@ function App() {
       }
     } catch (err) {
       console.error('Failed to load assets', err);
-      setReportError('Unable to connect to .NET Backend. Ensure API is running on http://localhost:5000');
+      setReportError('Unable to connect to .NET Backend. Ensure API is running on http://localhost:5500');
     }
   };
 
@@ -352,6 +356,18 @@ function App() {
       }
     } catch (err) {
       console.error('Failed to load queue jobs', err);
+    }
+  };
+
+  const fetchModelInfo = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/model-info`);
+      if (res.ok) {
+        const data = await res.json();
+        setModelInfo(data);
+      }
+    } catch (err) {
+      console.warn('Failed to load model info', err);
     }
   };
 
@@ -447,10 +463,34 @@ function App() {
       }
 
       await fetchJobs();
-      return data;
     } catch (err) {
       console.error(err);
       setReportError(`Failed to queue PDF: ${err.message}`);
+
+      // Send clear assistant explanation directly into the chat thread
+      const errorChatMsg = {
+        id: Date.now(),
+        sender: 'assistant',
+        text: `⚠️ **Data Notice**: ${err.message}\n\nPlease pick a timeframe within the recorded period to generate the report.`,
+        isOnTopic: true,
+        isComplete: false,
+        suggestedAction: 'select_timeframe',
+        suggestedOptions: [
+          '⚡ Last 24 Hours',
+          '📊 Last 5 Days',
+          '🗓️ Last 2 Weeks',
+          '📈 Last 30 Days',
+          'Custom Calendar Range'
+        ],
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      };
+
+      setMessages(prev => {
+        const next = [...prev, errorChatMsg];
+        try { localStorage.setItem(`sensor_bot_messages_${sessionId}`, JSON.stringify(next)); } catch (e) {}
+        return next;
+      });
+
       return null;
     } finally {
       setIsQueueing(false);
@@ -576,6 +616,9 @@ function App() {
             <span className="system-pill brand-pill">
               <span className="dot brand"></span> Life Is On &nbsp;|&nbsp; <strong>Schneider Electric</strong>
             </span>
+            <span className="system-pill active" title={`Configured AI Model: ${modelInfo?.activeModel || modelInfo?.model || 'qwen2.5:1.5b'}`}>
+              <Sparkles size={11} style={{ marginRight: '4px', color: '#10B981' }} /> AI: {modelInfo?.activeModel || modelInfo?.model || 'qwen2.5:1.5b'}
+            </span>
             <span className={`system-pill ${wsConnected ? 'active' : ''}`}>
               <span className={`dot ${wsConnected ? '' : 'danger'}`}></span> SignalR ({wsConnected ? 'Connected' : 'Connecting...'})
             </span>
@@ -600,7 +643,7 @@ function App() {
                   </div>
                   <div>
                     <h3>EcoStruxure™ AI Diagnostic Assistant</h3>
-                    <p>Rotating Machine Health Advisor • Jev + Qwen Hybrid</p>
+                    <p>Rotating Machine Health Advisor • Powered by {modelInfo?.activeModel || modelInfo?.model || 'Qwen 2.5 (1.5B)'}</p>
                   </div>
                 </div>
 
@@ -630,24 +673,31 @@ function App() {
                       <span className="suggestions-label"><Sparkles size={13} /> Quick diagnostic prompts:</span>
                       <button 
                         type="button"
-                        onClick={() => handleSendChat("Give me report for Boiler Feed Pump Motor for last 2 days")}
+                        onClick={() => handleSendChat("Give me report for Boiler Feed Pump Motor for last 24 hours")}
                         className="chat-chip on-topic"
                       >
-                        <ChevronRight size={13} /> "Give me report for Boiler Feed Pump Motor for last 2 days"
+                        <ChevronRight size={13} /> "Give me report for Boiler Feed Pump Motor for last 24 hours"
                       </button>
                       <button 
                         type="button"
-                        onClick={() => handleSendChat("Show health status for Chilled Water Pump 1")}
+                        onClick={() => handleSendChat("Show health status for Air Compressor Motor")}
                         className="chat-chip on-topic"
                       >
-                        <ChevronRight size={13} /> "Show health status for Chilled Water Pump 1"
+                        <ChevronRight size={13} /> "Show health status for Air Compressor Motor"
                       </button>
                       <button 
                         type="button"
-                        onClick={() => handleSendChat("Generate 7-day diagnostic report for Induced Draft Fan 2")}
+                        onClick={() => handleSendChat("Generate 5-day diagnostic report for Main Conveyor Drive Motor")}
                         className="chat-chip on-topic"
                       >
-                        <ChevronRight size={13} /> "Generate 7-day diagnostic report for Induced Draft Fan 2"
+                        <ChevronRight size={13} /> "Generate 5-day diagnostic report for Main Conveyor Drive Motor"
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={() => handleSendChat("Check vibration and bearing telemetry for Cooling Tower Fan Motor")}
+                        className="chat-chip on-topic"
+                      >
+                        <ChevronRight size={13} /> "Check vibration and bearing telemetry for Cooling Tower Fan Motor"
                       </button>
                     </div>
                   </div>
@@ -1073,7 +1123,7 @@ function App() {
                   type="text" 
                   value={chatInput}
                   onChange={(e) => setChatInput(e.target.value)}
-                  placeholder="Ask about sensors, reports, alarms (e.g. 'Report for Boiler Feed Pump Motor for 2 days')..."
+                  placeholder="Ask about sensors, reports, alarms (e.g. 'Report for Boiler Feed Pump Motor for last 24 hours')..."
                   disabled={isChatLoading}
                 />
                 <button 
@@ -1171,16 +1221,16 @@ function App() {
                       <button 
                         type="button"
                         className="empty-prompt-chip"
-                        onClick={() => handleSendChat("Give me report for Boiler Feed Pump Motor for last 2 days")}
+                        onClick={() => handleSendChat("Give me report for Boiler Feed Pump Motor for last 24 hours")}
                       >
-                        ⚡ "Give me report for Boiler Feed Pump Motor for last 2 days"
+                        ⚡ "Give me report for Boiler Feed Pump Motor for last 24 hours"
                       </button>
                       <button 
                         type="button"
                         className="empty-prompt-chip"
-                        onClick={() => handleSendChat("Generate 7-day report for Chilled Water Pump 1")}
+                        onClick={() => handleSendChat("Generate 5-day report for Air Compressor Motor")}
                       >
-                        📊 "Generate 7-day report for Chilled Water Pump 1"
+                        📊 "Generate 5-day report for Air Compressor Motor"
                       </button>
                     </div>
                   </div>

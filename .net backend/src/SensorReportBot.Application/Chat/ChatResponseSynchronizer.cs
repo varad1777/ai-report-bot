@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text.RegularExpressions;
 using SensorReportBot.Application.DTOs;
 using SensorReportBot.Domain.Entities;
 
@@ -14,7 +15,8 @@ public sealed record SyncedTurn(
     string SuggestedAction,
     IReadOnlyList<string> SuggestedOptions,
     ExtractedReportParametersDto Parameters,
-    string? Problem);
+    string? Problem,
+    string? HarmonizedReply = null);
 
 /// <summary>
 /// Server-side guard rails around the model's JSON. It never writes text for the user - the reply
@@ -46,14 +48,15 @@ public static class ChatResponseSynchronizer
         if (!raw.IsOnTopic)
         {
             return new SyncedTurn(false, prev.HasAsset && prev.HasCategory && prev.HasTime, SuggestedActions.None,
-                Array.Empty<string>(), prev, null);
+                Array.Empty<string>(), prev, null, raw.ReplyMessage);
         }
 
         var p = raw.ExtractedParameters ?? new ExtractedReportParametersDto();
         string? problem = null;
 
-        // ---- Asset -------------------------------------------------------------------------
-        var asset = ResolveAsset(p, assets);
+        // ---- Asset: User's explicit words take absolute precedence over small LLM hallucinations ----
+        var userAssetMatch = !string.IsNullOrWhiteSpace(userMessage) ? AssetMatcher.Match(userMessage, assets) : AssetMatchResult.None;
+        var asset = userAssetMatch.IsMatch ? userAssetMatch.Asset : ResolveAsset(p, assets);
         if (asset == null && !string.IsNullOrWhiteSpace(p.AssetName))
             problem = $"assetName \"{p.AssetName.Trim()}\" is not in the ASSETS catalog. Tell the user it is unknown and ask which catalog asset they want.";
 
@@ -62,14 +65,15 @@ public static class ChatResponseSynchronizer
             asset = null;
 
         bool assetChanged = asset != null && prev.HasAsset && asset.AssetId != prev.AssetId;
-        bool assetSelectedInThisTurn = !string.IsNullOrWhiteSpace(userMessage) && AssetMatcher.Match(userMessage, assets).IsMatch;
+        bool assetSelectedInThisTurn = userAssetMatch.IsMatch;
 
         // ---- Category (must be verified against active asset's categories) ------------------
         string? category = null;
         if (asset != null && availableCategories != null && availableCategories.Count > 0)
         {
+            var excludeTokens = asset != null ? AssetMatcher.Tokenize(asset.Name) : null;
             var userCatMatch = !string.IsNullOrWhiteSpace(userMessage)
-                ? CategoryMatcher.Match(userMessage, availableCategories)
+                ? CategoryMatcher.Match(userMessage, availableCategories, excludeTokens)
                 : CategoryMatchResult.None;
 
             string? candidateCat;
@@ -154,7 +158,30 @@ public static class ChatResponseSynchronizer
             _ => Array.Empty<string>()
         };
 
-        return new SyncedTurn(true, complete, action, options, result, problem);
+        // ---- Harmonize Reply Message against Synchronized Stage ---------------------------
+        string? harmonizedReply = raw.ReplyMessage;
+        if (!string.IsNullOrWhiteSpace(harmonizedReply))
+        {
+            // 1. If asset changed, but LLM repeated old asset name, replace it
+            if (result.HasAsset && !string.IsNullOrWhiteSpace(prev.AssetName) && result.AssetName != prev.AssetName && harmonizedReply.Contains(prev.AssetName, StringComparison.OrdinalIgnoreCase))
+            {
+                harmonizedReply = Regex.Replace(harmonizedReply, Regex.Escape(prev.AssetName), result.AssetName!, RegexOptions.IgnoreCase);
+            }
+
+            // 2. If the turn is asking for a TIMEFRAME (category is already selected), but LLM repeated "Which signal category would you like to examine?"
+            if (action == SuggestedActions.SelectTimeframe && result.HasCategory && (harmonizedReply.Contains("Which signal category", StringComparison.OrdinalIgnoreCase) || harmonizedReply.Contains("Which category", StringComparison.OrdinalIgnoreCase)))
+            {
+                harmonizedReply = $"I have configured {result.Category} for {result.AssetName}. Which timeframe would you like to analyze (e.g. 24 hours, 5 days, or pick dates)?";
+            }
+
+            // 3. If the turn is asking for CATEGORY, but LLM repeated an asset question
+            if (action == SuggestedActions.SelectCategory && !result.HasCategory && result.HasAsset && (harmonizedReply.Contains("Which machine", StringComparison.OrdinalIgnoreCase) || harmonizedReply.Contains("Which equipment", StringComparison.OrdinalIgnoreCase)))
+            {
+                harmonizedReply = $"I have selected {result.AssetName}. Which signal category would you like to examine?";
+            }
+        }
+
+        return new SyncedTurn(true, complete, action, options, result, problem, harmonizedReply);
     }
 
     private static bool SameTime(ExtractedReportParametersDto a, ExtractedReportParametersDto b) =>

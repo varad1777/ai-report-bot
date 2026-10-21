@@ -67,4 +67,26 @@ app.MapControllers();
 app.MapHub<SensorReportBot.Api.Hubs.ChatHub>("/hubs/chat");
 app.MapHealthChecks("/health");
 
+app.MapGet("/api/model-info", (
+    Microsoft.Extensions.Options.IOptions<SensorReportBot.Infrastructure.Configuration.LlmOptions> options,
+    SensorReportBot.Application.Interfaces.ILayaClient layaClient) =>
+{
+    var opt = options.Value;
+    return Results.Ok(new
+    {
+        activeModel = opt.Model,
+        model = opt.Model,
+        provider = "Ollama",
+        endpoint = opt.Endpoint,
+        temperature = opt.Temperature,
+        timeoutSeconds = opt.TimeoutSeconds,
+        architecture = "Qwen 2.5",
+        pipeline = new
+        {
+            chatReasoning = opt.Model,
+            decisionModel = layaClient.IsEnabled ? "JEV / Laya (In-Process ONNX, Inactive in Chat)" : "None"
+        }
+    });
+});
+
 app.Run();

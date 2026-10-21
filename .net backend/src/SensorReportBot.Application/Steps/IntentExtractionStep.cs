@@ -56,43 +56,15 @@ public class IntentExtractionStep : IChatStep
     public async Task RunAsync(ChatRequestState state, CancellationToken ct)
     {
         var assets = await _telemetryRepo.GetAssetsAsync(ct);
-        string? layaHintNote = null;
-        IReadOnlyList<string> availableCategories = Array.Empty<string>();
-        LayaAnalysis? analysis = null;
 
-        // ── 1. Cognitive Pre-Processing via Jev (System-1 ONNX ~25ms) ──
-        if (_layaClient.IsEnabled)
-        {
-            try
-            {
-                analysis = await AnalyzeWithLayaAsync(state, assets, ct);
-                availableCategories = analysis.AvailableCategories;
-
-                // Pass Jev's System-1 pre-analysis hints directly to Qwen System-2 to guide reasoning
-                layaHintNote = BuildLayaHintNote(analysis);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Jev cognitive pre-processor encountered an issue; falling back to deep LLM.");
-            }
-        }
-
-        // If not retrieved via Laya, query available categories for active asset
-        if (availableCategories.Count == 0)
-        {
-            var activeAssetMatch = AssetMatcher.Match(state.UserMessage, assets).Asset
-                ?? (state.PreviousParameters?.AssetId != null ? assets.FirstOrDefault(a => a.AssetId == state.PreviousParameters.AssetId) : null);
-            if (activeAssetMatch != null)
-            {
-                availableCategories = await _telemetryRepo.GetSignalCategoriesByAssetAsync(activeAssetMatch.AssetId, ct);
-            }
-        }
+        // ── 1. Deterministic Entity Extraction (Asset -> Category -> Timeframe) ──
+        var analysis = await ExtractTurnEntitiesAsync(state, assets, ct);
+        var availableCategories = analysis.AvailableCategories;
 
         // Compute pre-grounded state parameters to pass in prompt's STATE: line
-        var promptStateParams = state.PreviousParameters?.Clone();
-        if (analysis?.ActiveAsset != null)
+        var promptStateParams = state.PreviousParameters?.Clone() ?? new ExtractedReportParametersDto();
+        if (analysis.ActiveAsset != null)
         {
-            promptStateParams ??= new ExtractedReportParametersDto();
             promptStateParams.AssetId = analysis.ActiveAsset.AssetId;
             promptStateParams.AssetName = analysis.ActiveAsset.Name;
             promptStateParams.Category = analysis.TargetCategory;
@@ -101,10 +73,14 @@ public class IntentExtractionStep : IChatStep
             promptStateParams.ToDate = analysis.ParsedTimeframe?.ToDate;
         }
 
-        // ── 2. Deep-Path: Ollama Qwen with Laya hints for reasoning (2-3s) ──
+        string? categoryNote = availableCategories.Count > 0
+            ? $"AVAILABLE_CATEGORIES: [{string.Join(", ", availableCategories.Select(c => $"\"{c}\""))}]"
+            : null;
+
+        // ── 2. Deep-Path: Ollama Qwen for Conversational Dialogue & JSON Contract (1-2s) ──
         string systemPrompt = await BuildSystemPromptAsync(assets, ct);
 
-        var (reply, turn) = await AskAsync(state, systemPrompt, assets, note: layaHintNote, availableCategories, ct, promptStateParams);
+        var (reply, turn) = await AskAsync(state, systemPrompt, assets, note: categoryNote, availableCategories, ct, promptStateParams);
 
         // One corrective retry when reply is empty or invented invalid schema parameters.
         string? problem = string.IsNullOrWhiteSpace(reply?.ReplyMessage)
@@ -114,7 +90,7 @@ public class IntentExtractionStep : IChatStep
         if (problem != null)
         {
             _logger.LogInformation("Retrying LLM call once. Problem: {Problem}", problem);
-            string retryNote = string.IsNullOrWhiteSpace(layaHintNote) ? problem : $"{layaHintNote} | RETRY_PROBLEM: {problem}";
+            string retryNote = string.IsNullOrWhiteSpace(categoryNote) ? problem : $"{categoryNote} | RETRY_PROBLEM: {problem}";
             var (retryReply, retryTurn) = await AskAsync(state, systemPrompt, assets, retryNote, availableCategories, ct, promptStateParams);
             if (!string.IsNullOrWhiteSpace(retryReply?.ReplyMessage))
             {
@@ -157,6 +133,8 @@ public class IntentExtractionStep : IChatStep
                         {
                             hasData = true;
                             period = anchoredPeriod;
+                            turn.Parameters.FromDate = anchoredPeriod.Value.From.ToString("yyyy-MM-ddTHH:mm:ssZ");
+                            turn.Parameters.ToDate = anchoredPeriod.Value.To.ToString("yyyy-MM-ddTHH:mm:ssZ");
                         }
                     }
                 }
@@ -182,7 +160,7 @@ public class IntentExtractionStep : IChatStep
             }
         }
 
-        state.Reply = reply.ReplyMessage.Trim();
+        state.Reply = (turn.HarmonizedReply ?? reply.ReplyMessage).Trim();
         state.IsOnTopic = turn.IsOnTopic;
         state.IsComplete = turn.IsComplete;
         state.SuggestedAction = turn.SuggestedAction;
@@ -190,50 +168,21 @@ public class IntentExtractionStep : IChatStep
         state.ExtractedParameters = turn.Parameters;
     }
 
-    private static string? BuildLayaHintNote(LayaAnalysis analysis)
-    {
-        var parts = new List<string>();
-        if (!string.IsNullOrWhiteSpace(analysis.LayaIntent))
-            parts.Add($"intent={analysis.LayaIntent}");
-        if (analysis.ActiveAsset != null)
-            parts.Add($"asset=\"{analysis.ActiveAsset.Name}\" (id={analysis.ActiveAsset.AssetId})");
-        if (!string.IsNullOrWhiteSpace(analysis.TargetCategory))
-            parts.Add($"category=\"{analysis.TargetCategory}\"");
-        else
-            parts.Add("category=none");
-
-        if (analysis.AvailableCategories.Count > 0)
-            parts.Add($"available_categories=[{string.Join(", ", analysis.AvailableCategories.Select(c => $"\"{c}\""))}]");
-
-        if (analysis.ParsedTimeframe is { Found: true })
-            parts.Add($"timeframe=\"{analysis.ParsedTimeframe.TimeRange ?? $"{analysis.ParsedTimeframe.FromDate}..{analysis.ParsedTimeframe.ToDate}"}\"");
-
-        if (!string.IsNullOrWhiteSpace(analysis.ActionToTake))
-            parts.Add($"action_to_take=\"{analysis.ActionToTake}\"");
-
-        if (analysis.IsRelevant.HasValue)
-            parts.Add($"relevance={(analysis.IsRelevant.Value ? "on_topic" : "off_topic")}");
-
-        return parts.Count > 0 ? "JEV_COGNITIVE_GUIDE: " + string.Join(" | ", parts) : null;
-    }
-
-    private async Task<LayaAnalysis> AnalyzeWithLayaAsync(
+    private async Task<PreProcessedEntities> ExtractTurnEntitiesAsync(
         ChatRequestState state,
         IReadOnlyList<AssetDto> assets,
         CancellationToken ct)
     {
         string userMsg = state.UserMessage?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(userMsg))
-            return new LayaAnalysis();
+            return new PreProcessedEntities();
 
         var prevParams = state.PreviousParameters?.Clone() ?? new ExtractedReportParametersDto();
 
         // 1. Deterministic Reset / Clear Request (C# Exact Match)
         if (IsResetRequest(userMsg))
         {
-            return new LayaAnalysis(
-                LayaIntent: "reset_options",
-                IsRelevant: true,
+            return new PreProcessedEntities(
                 ActiveAsset: null,
                 TargetCategory: null,
                 ParsedTimeframe: null,
@@ -247,57 +196,34 @@ public class IntentExtractionStep : IChatStep
         bool assetChanged = matchedAsset != null && prevParams.HasAsset && matchedAsset.AssetId != prevParams.AssetId;
         bool assetSelectedInThisTurn = matchedAsset != null;
 
-        var activeAsset = matchedAsset ?? (prevParams.HasAsset ? assets.FirstOrDefault(a => a.AssetId == prevParams.AssetId) : null);
+        bool isChangeAsset = IsChangeAssetRequest(userMsg);
+        bool isChangeCategory = IsChangeCategoryRequest(userMsg);
+
+        var activeAsset = matchedAsset ?? ((isChangeAsset && matchedAsset == null) ? null : (prevParams.HasAsset ? assets.FirstOrDefault(a => a.AssetId == prevParams.AssetId) : null));
         var availableCategories = activeAsset != null
             ? await _telemetryRepo.GetSignalCategoriesByAssetAsync(activeAsset.AssetId, ct)
             : (IReadOnlyList<string>)Array.Empty<string>();
 
-        // 3. Category matching (no regex, direct name / UI chip match)
-        // If an asset was matched in the message, remove asset name to see what remains
-        string remainingQuery = userMsg;
-        if (matchedAsset != null)
-        {
-            int idx = remainingQuery.IndexOf(matchedAsset.Name, StringComparison.OrdinalIgnoreCase);
-            if (idx >= 0)
-            {
-                remainingQuery = remainingQuery.Remove(idx, matchedAsset.Name.Length).Trim();
-            }
-        }
+        // 3. Category matching (no regex, direct name / UI chip match with typo tolerance)
+        // If an asset was matched in this turn, exclude its words so asset tokens never falsely match category
+        IEnumerable<string>? excludeTokens = matchedAsset != null
+            ? AssetMatcher.Tokenize(matchedAsset.Name)
+            : null;
 
         string? matchedCategory = null;
-        if (!string.IsNullOrWhiteSpace(remainingQuery) && availableCategories.Count > 0)
+        if (availableCategories.Count > 0)
         {
-            var catMatch = CategoryMatcher.Match(remainingQuery, availableCategories);
+            var catMatch = CategoryMatcher.Match(userMsg, availableCategories, excludeTokens);
             if (catMatch.IsMatch)
             {
                 matchedCategory = catMatch.Category;
             }
-            else if (_layaClient.IsEnabled && remainingQuery.Length >= 3 && !TimeframeParser.Parse(remainingQuery, allowBareNumber: false).Found)
-            {
-                try
-                {
-                    var jevCat = await _layaClient.AskAsync(
-                        remainingQuery,
-                        "Which equipment monitoring category is the user asking about?",
-                        "choice",
-                        choices: availableCategories.ToArray(),
-                        ct);
-
-                    if (jevCat != null && jevCat.Probability >= 0.70 && availableCategories.Contains(jevCat.AsString))
-                    {
-                        matchedCategory = jevCat.AsString;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug(ex, "Laya category classification skipped.");
-                }
-            }
         }
 
         string? targetCategory;
-        if (assetChanged || (assetSelectedInThisTurn && matchedCategory == null))
+        if (assetChanged || (assetSelectedInThisTurn && matchedCategory == null) || (isChangeCategory && matchedCategory == null))
         {
+            // When an asset is changed or newly selected without an explicit category, or user asked to change category, reset category
             targetCategory = matchedCategory;
         }
         else
@@ -309,52 +235,9 @@ public class IntentExtractionStep : IChatStep
         var timeResult = TimeframeParser.Parse(userMsg, allowBareNumber: true, utcNow: DateTime.UtcNow);
         var targetTime = timeResult.Found
             ? timeResult
-            : (assetChanged || assetSelectedInThisTurn ? null : (prevParams.HasTime ? new TimeframeResult(prevParams.TimeRange, prevParams.FromDate, prevParams.ToDate, null) : null));
+            : (assetChanged || assetSelectedInThisTurn || isChangeCategory ? null : (prevParams.HasTime ? new TimeframeResult(prevParams.TimeRange, prevParams.FromDate, prevParams.ToDate, null) : null));
 
-        // 5. Intent Classification via Jev (~25ms)
-        string intent = "configure_report";
-        if (matchedCategory == null && !timeResult.Found && !assetSelectedInThisTurn)
-        {
-            try
-            {
-                var intentRes = await _layaClient.AskAsync(
-                    userMsg,
-                    "What is the user trying to do?",
-                    "choice",
-                    choices: new[] { "greeting", "reset_options", "confirm_queue", "configure_report", "general_question" },
-                    ct);
-                if (intentRes?.AsString != null)
-                {
-                    intent = intentRes.AsString.ToLowerInvariant();
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Laya intent classification skipped.");
-            }
-        }
-
-        // 6. Relevance Guardrail via Jev
-        bool isRelevant = true;
-        if (activeAsset == null && targetCategory == null && (targetTime == null || !targetTime.Found))
-        {
-            try
-            {
-                var topicRes = await _layaClient.AskAsync(
-                    userMsg,
-                    "Is this message relevant to industrial plant machinery, sensors, telemetry, equipment monitoring, report generation, or asking about available assets/catalog?",
-                    "noul",
-                    choices: null,
-                    ct);
-                isRelevant = topicRes?.AsBoolean ?? true;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Laya relevance check skipped.");
-            }
-        }
-
-        // 7. Deduce Action To Take
+        // 5. Deduce Action To Take
         string actionToTake =
             activeAsset == null ? SuggestedActions.SelectAsset :
             string.IsNullOrWhiteSpace(targetCategory) ? SuggestedActions.SelectCategory :
@@ -362,12 +245,10 @@ public class IntentExtractionStep : IChatStep
             SuggestedActions.ConfirmQueue;
 
         _logger.LogInformation(
-            "Jev cognitive pre-processor: intent={Intent}, asset={Asset}, category={Category}, time={Time}, action={Action}, isRelevant={IsRelevant}",
-            intent, activeAsset?.Name, targetCategory, targetTime?.TimeRange, actionToTake, isRelevant);
+            "Deterministic pre-processor: asset={Asset}, category={Category}, time={Time}, action={Action}",
+            activeAsset?.Name, targetCategory, targetTime?.TimeRange, actionToTake);
 
-        return new LayaAnalysis(
-            LayaIntent: intent,
-            IsRelevant: isRelevant,
+        return new PreProcessedEntities(
             ActiveAsset: activeAsset,
             TargetCategory: targetCategory,
             ParsedTimeframe: targetTime,
@@ -380,6 +261,45 @@ public class IntentExtractionStep : IChatStep
         if (string.IsNullOrWhiteSpace(message)) return false;
         string trimmed = message.Trim().TrimEnd('.', '!', '?');
         return ResetWords.Contains(trimmed);
+    }
+
+    private static bool IsChangeAssetRequest(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message)) return false;
+        var words = message.ToLowerInvariant().Split(new[] { ' ', ',', '.', '!', '?', '\'', '"' }, StringSplitOptions.RemoveEmptyEntries);
+        bool hasChangeWord = words.Any(w => w is "change" or "switch" or "different" or "another" or "other" or "pick" or "select" or "choose" or "new");
+        bool hasAssetWord = words.Any(w => w is "asset" or "machine" or "motor" or "equipment"
+            || (w.Length >= 4 && (EditDistance(w, "asset") <= 2 || EditDistance(w, "machine") <= 2 || EditDistance(w, "motor") <= 1)));
+        return hasChangeWord && hasAssetWord;
+    }
+
+    private static bool IsChangeCategoryRequest(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message)) return false;
+        var words = message.ToLowerInvariant().Split(new[] { ' ', ',', '.', '!', '?', '\'', '"' }, StringSplitOptions.RemoveEmptyEntries);
+        bool hasChangeWord = words.Any(w => w is "change" or "switch" or "different" or "another" or "other" or "pick" or "select" or "choose" or "new");
+        bool hasCategoryWord = words.Any(w => w is "category" or "categories" or "signal" or "signals" or "metric" or "metrics" or "sensor" or "sensors"
+            || (w.Length >= 5 && (EditDistance(w, "category") <= 2 || EditDistance(w, "signal") <= 1)));
+        return hasChangeWord && hasCategoryWord;
+    }
+
+    private static int EditDistance(string a, string b)
+    {
+        var prev = new int[b.Length + 1];
+        var cur = new int[b.Length + 1];
+        for (int j = 0; j <= b.Length; j++) prev[j] = j;
+
+        for (int i = 1; i <= a.Length; i++)
+        {
+            cur[0] = i;
+            for (int j = 1; j <= b.Length; j++)
+            {
+                int cost = a[i - 1] == b[j - 1] ? 0 : 1;
+                cur[j] = Math.Min(Math.Min(cur[j - 1] + 1, prev[j] + 1), prev[j - 1] + cost);
+            }
+            Array.Copy(cur, prev, cur.Length);
+        }
+        return cur[b.Length];
     }
 
     private static bool IsConversationalNuance(string text)
@@ -500,9 +420,7 @@ public class IntentExtractionStep : IChatStep
         return template.Replace("{AssetCatalog}", catalog);
     }
 
-    private sealed record LayaAnalysis(
-        string? LayaIntent = null,
-        bool? IsRelevant = null,
+    private sealed record PreProcessedEntities(
         AssetDto? ActiveAsset = null,
         string? TargetCategory = null,
         TimeframeResult? ParsedTimeframe = null,

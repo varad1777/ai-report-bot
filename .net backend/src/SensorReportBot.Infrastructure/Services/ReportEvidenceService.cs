@@ -218,7 +218,14 @@ public class ReportEvidenceService : IReportEvidenceService
         }
 
         // ── 7. Alerts & Day-by-Day Distributions (Unified Real Alerts + Excursion Events) ─
-        const string alertSql = @"
+        string categoryFilterAlerts = !string.IsNullOrWhiteSpace(category)
+            ? (signalIds.Length > 0 ? "AND a.signal_id = ANY(@Ids)" : "AND 1 = 0")
+            : "";
+        string categoryFilterEvents = !string.IsNullOrWhiteSpace(category)
+            ? (signalIds.Length > 0 ? "AND e.signal_id = ANY(@Ids)" : "AND 1 = 0")
+            : "";
+
+        string alertSql = $@"
             WITH raw_alerts AS (
                 SELECT
                     a.signal_id,
@@ -239,6 +246,7 @@ public class ReportEvidenceService : IReportEvidenceService
                 WHERE a.asset_id = @AssetId
                   AND a.triggered_at >= @From
                   AND a.triggered_at <= @To
+                  {categoryFilterAlerts}
 
                 UNION ALL
 
@@ -261,6 +269,7 @@ public class ReportEvidenceService : IReportEvidenceService
                 WHERE e.asset_id = @AssetId
                   AND e.start_time >= @From
                   AND e.start_time <= @To
+                  {categoryFilterEvents}
             ),
             deduped AS (
                 SELECT DISTINCT ON (signal_id, date_trunc('hour', TriggeredAt))
@@ -284,7 +293,7 @@ public class ReportEvidenceService : IReportEvidenceService
 
         var dbAlerts = (await conn.QueryAsync<AlertEvidenceDto>(
             alertSql,
-            new { AssetId = selectedAsset.AssetId, From = from, To = to }
+            new { AssetId = selectedAsset.AssetId, Ids = signalIds, From = from, To = to }
         )).ToList();
 
         // Ensure every signal displayed on the monitoring graphs that experienced excursions has an alert entry

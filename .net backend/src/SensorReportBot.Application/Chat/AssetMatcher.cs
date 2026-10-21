@@ -26,7 +26,7 @@ public static class AssetMatcher
 
     private static readonly HashSet<string> Stopwords = new(StringComparer.OrdinalIgnoreCase)
     {
-        "main", "primary", "the", "of", "and", "for"
+        "the", "of", "and", "for", "in", "to", "a", "an"
     };
 
     private static readonly Regex TokenRegex = new(@"[a-z0-9]+", RegexOptions.Compiled);
@@ -95,7 +95,7 @@ public static class AssetMatcher
             : new AssetMatchResult(null, candidates);
     }
 
-    private static List<string> Tokenize(string name) =>
+    public static List<string> Tokenize(string name) =>
         TokenRegex.Matches(name.ToLowerInvariant())
             .Select(m => m.Value)
             .Where(t => t.Length >= 2 && !Stopwords.Contains(t))

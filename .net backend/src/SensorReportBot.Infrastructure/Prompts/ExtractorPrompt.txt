@@ -52,6 +52,9 @@ STATE: asset=3 "Cooling Tower Fan Motor", category=null | USER: "vibration for l
 STATE: empty | USER: "report for cooling tower"
 {"extractedParameters":{"assetId":3,"assetName":"Cooling Tower Fan Motor","category":null,"signalIds":null,"timeRange":null,"fromDate":null,"toDate":null,"mode":"raw"},"isOnTopic":true,"isComplete":false,"suggestedAction":"select_category","replyMessage":"I have selected Cooling Tower Fan Motor. Which signal category would you like to examine?"}
 
+STATE: asset=3 "Cooling Tower Fan Motor", category=none | USER: "Vibration"
+{"extractedParameters":{"assetId":3,"assetName":"Cooling Tower Fan Motor","category":"Vibration","signalIds":null,"timeRange":null,"fromDate":null,"toDate":null,"mode":"raw"},"isOnTopic":true,"isComplete":false,"suggestedAction":"select_timeframe","replyMessage":"I have configured Vibration for Cooling Tower Fan Motor. Which timeframe would you like to analyze (e.g. 24 hours, 5 days, or custom dates)?"}
+
 STATE: empty | USER: "motor"
 {"extractedParameters":{"assetId":null,"assetName":null,"category":null,"signalIds":null,"timeRange":null,"fromDate":null,"toDate":null,"mode":"raw"},"isOnTopic":true,"isComplete":false,"suggestedAction":"select_asset","replyMessage":"Several assets match 'motor': Boiler Feed Pump Motor, Air Compressor Motor, Main Conveyor Drive Motor, Cooling Tower Fan Motor, Primary Crusher Motor. Which one do you mean?"}
 

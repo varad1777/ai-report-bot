@@ -207,7 +207,11 @@ public class TelemetryRepository : ITelemetryRepository
         // 6. Events (if requested)
         if (request.IncludeEvents)
         {
-            const string eventSql = @"
+            string categoryFilter = !string.IsNullOrWhiteSpace(request.Category)
+                ? (signalIds.Length > 0 ? "AND e.signal_id = ANY(@SignalIds)" : "AND 1 = 0")
+                : "";
+
+            string eventSql = $@"
                 SELECT 
                     e.event_id AS EventId,
                     e.signal_id AS SignalId,
@@ -219,10 +223,10 @@ public class TelemetryRepository : ITelemetryRepository
                     e.threshold AS Threshold
                 FROM events e
                 JOIN signals s ON e.signal_id = s.signal_id
-                WHERE e.asset_id = @AssetId AND e.start_time >= @FromTime AND e.start_time <= @ToTime
+                WHERE e.asset_id = @AssetId AND e.start_time >= @FromTime AND e.start_time <= @ToTime {categoryFilter}
                 ORDER BY e.start_time DESC;";
 
-            var events = await conn.QueryAsync<EventItemDto>(eventSql, new { request.AssetId, FromTime = fromTime, ToTime = toTime });
+            var events = await conn.QueryAsync<EventItemDto>(eventSql, new { request.AssetId, SignalIds = signalIds, FromTime = fromTime, ToTime = toTime });
             report.Events = events.ToList();
 
             // Count excursions per signal
@@ -236,7 +240,11 @@ public class TelemetryRepository : ITelemetryRepository
         // 7. Alerts (if requested)
         if (request.IncludeAlerts)
         {
-            const string alertSql = @"
+            string categoryFilter = !string.IsNullOrWhiteSpace(request.Category)
+                ? (signalIds.Length > 0 ? "AND a.signal_id = ANY(@SignalIds)" : "AND 1 = 0")
+                : "";
+
+            string alertSql = $@"
                 SELECT 
                     a.alert_id AS AlertId,
                     a.signal_id AS SignalId,
@@ -249,10 +257,10 @@ public class TelemetryRepository : ITelemetryRepository
                     a.resolved_at AS ResolvedAt
                 FROM alerts a
                 JOIN signals s ON a.signal_id = s.signal_id
-                WHERE a.asset_id = @AssetId AND a.triggered_at >= @FromTime AND a.triggered_at <= @ToTime
+                WHERE a.asset_id = @AssetId AND a.triggered_at >= @FromTime AND a.triggered_at <= @ToTime {categoryFilter}
                 ORDER BY a.triggered_at DESC;";
 
-            var alerts = await conn.QueryAsync<AlertItemDto>(alertSql, new { request.AssetId, FromTime = fromTime, ToTime = toTime });
+            var alerts = await conn.QueryAsync<AlertItemDto>(alertSql, new { request.AssetId, SignalIds = signalIds, FromTime = fromTime, ToTime = toTime });
             report.Alerts = alerts.ToList();
         }
 

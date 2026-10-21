@@ -57,6 +57,23 @@ public class ReportsController : ControllerBase
         var (hasData, pointCount, minRecorded, maxRecorded) = await _telemetryRepository.CheckDataAvailabilityAsync(
             request.AssetId, from, to, ct);
 
+        if (!hasData && maxRecorded.HasValue && to > maxRecorded.Value)
+        {
+            var span = to - from;
+            var anchoredTo = maxRecorded.Value;
+            var anchoredFrom = anchoredTo - span;
+            var (anchoredHasData, _, _, _) = await _telemetryRepository.CheckDataAvailabilityAsync(
+                request.AssetId, anchoredFrom, anchoredTo, ct);
+            if (anchoredHasData)
+            {
+                hasData = true;
+                from = anchoredFrom;
+                to = anchoredTo;
+                request.From = from;
+                request.To = to;
+            }
+        }
+
         if (!hasData)
         {
             string notice = (minRecorded.HasValue && maxRecorded.HasValue)
@@ -90,6 +107,23 @@ public class ReportsController : ControllerBase
 
         var (hasData, pointCount, minRecorded, maxRecorded) = await _telemetryRepository.CheckDataAvailabilityAsync(
             request.AssetId, from, to, ct);
+
+        if (!hasData && maxRecorded.HasValue && to > maxRecorded.Value)
+        {
+            var span = to - from;
+            var anchoredTo = maxRecorded.Value;
+            var anchoredFrom = anchoredTo - span;
+            var (anchoredHasData, _, _, _) = await _telemetryRepository.CheckDataAvailabilityAsync(
+                request.AssetId, anchoredFrom, anchoredTo, ct);
+            if (anchoredHasData)
+            {
+                hasData = true;
+                from = anchoredFrom;
+                to = anchoredTo;
+                request.From = from;
+                request.To = to;
+            }
+        }
 
         if (!hasData)
         {

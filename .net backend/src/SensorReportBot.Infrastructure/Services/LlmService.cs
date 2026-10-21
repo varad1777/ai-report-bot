@@ -105,31 +105,37 @@ public class LlmService : ILlmService
             ? (object)new { type = "json_object" }
             : new { type = "json_schema", json_schema = new { name = "chat_reply", strict = true, schema = jsonSchema } };
 
-        var payload = new
+        bool isOllama = endpointUrl.Contains(":11434") || endpointUrl.Contains("ollama", System.StringComparison.OrdinalIgnoreCase);
+
+        var payloadDict = new System.Collections.Generic.Dictionary<string, object?>
         {
-            model = _options.Model,
-            temperature = _options.Temperature,
-            max_tokens = _options.MaxTokens,
-            stream = false,
-            keep_alive = "24h",
-            response_format = responseFormat,
-            options = new
-            {
-                num_ctx = _options.NumCtx > 0 ? _options.NumCtx : 8192
-            },
-            messages = new[]
+            ["model"] = _options.Model,
+            ["temperature"] = _options.Temperature,
+            ["max_tokens"] = _options.MaxTokens,
+            ["stream"] = false,
+            ["response_format"] = responseFormat,
+            ["messages"] = new object[]
             {
                 new { role = "system", content = systemPrompt },
                 new { role = "user", content = userMessage }
             }
         };
 
+        if (isOllama)
+        {
+            payloadDict["keep_alive"] = -1;
+            payloadDict["options"] = new
+            {
+                num_ctx = _options.NumCtx > 0 ? _options.NumCtx : 8192
+            };
+        }
+
         using var request = new HttpRequestMessage(HttpMethod.Post, endpointUrl);
         if (!string.IsNullOrWhiteSpace(_options.ApiKey))
         {
             request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _options.ApiKey);
         }
-        request.Content = JsonContent.Create(payload);
+        request.Content = JsonContent.Create(payloadDict);
 
         return await _httpClient.SendAsync(request, ct);
     }
@@ -232,6 +238,25 @@ public class LlmService : ILlmService
     {
         if (string.IsNullOrWhiteSpace(raw)) return "{}";
         string trimmed = raw.Trim();
+
+        // 1. Strip reasoning traces from models like DeepSeek-R1 (<think>...</think>)
+        int thinkStart = trimmed.IndexOf("<think>", System.StringComparison.OrdinalIgnoreCase);
+        while (thinkStart >= 0)
+        {
+            int thinkEnd = trimmed.IndexOf("</think>", thinkStart, System.StringComparison.OrdinalIgnoreCase);
+            if (thinkEnd >= 0)
+            {
+                trimmed = trimmed.Remove(thinkStart, (thinkEnd + "</think>".Length) - thinkStart).Trim();
+                thinkStart = trimmed.IndexOf("<think>", System.StringComparison.OrdinalIgnoreCase);
+            }
+            else
+            {
+                trimmed = trimmed[(thinkStart + "<think>".Length)..].Trim();
+                break;
+            }
+        }
+
+        // 2. Strip Markdown code fences
         if (trimmed.StartsWith("```"))
         {
             int firstLineEnd = trimmed.IndexOf('\n');
@@ -239,6 +264,7 @@ public class LlmService : ILlmService
             if (trimmed.EndsWith("```")) trimmed = trimmed[..^3];
         }
         
+        // 3. Extract JSON object substring
         int start = trimmed.IndexOf('{');
         int end = trimmed.LastIndexOf('}');
         if (start >= 0 && end > start)

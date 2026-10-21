@@ -34,8 +34,8 @@ ENV PLAYWRIGHT_BROWSERS_PATH=0 \
 
 COPY --from=build /app/publish .
 
-EXPOSE 5000
+EXPOSE 5500
 
-ENV ASPNETCORE_URLS=http://0.0.0.0:5000
+ENV ASPNETCORE_URLS=http://0.0.0.0:5500
 
 ENTRYPOINT ["dotnet", "SensorReportBot.Api.dll"]

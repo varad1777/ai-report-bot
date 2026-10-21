@@ -34,44 +34,74 @@ public class LlmWarmupBackgroundService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        // Wait 1.5 seconds for the web server and database connection pool to spin up
-        await Task.Delay(1500, stoppingToken);
+        // Initial delay to let Kestrel server bind ports and services initialize
+        await Task.Delay(2000, stoppingToken);
 
-        try
+        const int maxAttempts = 15;
+        for (int attempt = 1; attempt <= maxAttempts && !stoppingToken.IsCancellationRequested; attempt++)
         {
-            _logger.LogInformation("🔥 [LLM Pre-Warm] Starting background warm-up to pre-cache System Prompt and model weights...");
-            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                _logger.LogInformation("🔥 [LLM Pre-Warm] Attempt {Attempt}/{MaxAttempts}: Loading model weights & pre-caching System Prompt...", attempt, maxAttempts);
+                var sw = System.Diagnostics.Stopwatch.StartNew();
 
-            using var scope = _scopeFactory.CreateScope();
-            var telemetryRepo = scope.ServiceProvider.GetRequiredService<ITelemetryRepository>();
-            var promptProvider = scope.ServiceProvider.GetRequiredService<IPromptProvider>();
-            var llmService = scope.ServiceProvider.GetRequiredService<ILlmService>();
+                using var scope = _scopeFactory.CreateScope();
+                var telemetryRepo = scope.ServiceProvider.GetRequiredService<ITelemetryRepository>();
+                var promptProvider = scope.ServiceProvider.GetRequiredService<IPromptProvider>();
+                var llmService = scope.ServiceProvider.GetRequiredService<ILlmService>();
 
-            var assets = await telemetryRepo.GetAssetsAsync(stoppingToken);
-            string template = await promptProvider.GetPromptAsync("ExtractorPrompt", stoppingToken);
-            string catalog = assets.Count == 0
-                ? "(none)"
-                : string.Join(" | ", assets.Select(a => $"{a.AssetId}: {a.Name}"));
+                // 1. Fetch real assets from database (wait until seeder has populated catalog)
+                var assets = await telemetryRepo.GetAssetsAsync(stoppingToken);
+                if (assets.Count == 0 && attempt < 8)
+                {
+                    _logger.LogInformation("⏳ [LLM Pre-Warm] Asset catalog is still empty (database seeder running). Waiting for catalog...");
+                    await Task.Delay(3000, stoppingToken);
+                    continue;
+                }
 
-            string systemPrompt = template.Replace("{AssetCatalog}", catalog);
-            string warmupUserPrompt = "NOW: " + DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm'Z'") + "\nSTATE: asset=none time=none\nUSER: hi";
+                // 2. Build exact System Prompt matching production user requests
+                string template = await promptProvider.GetPromptAsync("ExtractorPrompt", stoppingToken);
+                string catalog = assets.Count == 0
+                    ? "(none)"
+                    : string.Join(" | ", assets.Select(a => $"{a.AssetId}: {a.Name}"));
 
-            await llmService.GenerateJsonResponseAsync<LlmChatReplyDto>(
-                systemPrompt,
-                warmupUserPrompt,
-                stoppingToken,
-                ChatReplySchema.Value);
+                string systemPrompt = template.Replace("{AssetCatalog}", catalog);
 
-            sw.Stop();
-            _logger.LogInformation("✅ [LLM Pre-Warm] Completed in {ElapsedMs}ms. Model and System Prompt KV-Cache are now HOT in memory.", sw.ElapsedMilliseconds);
-        }
-        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-        {
-            // Application is shutting down
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning("⚠️ [LLM Pre-Warm] Background pre-warm did not complete (LLM server might be starting up): {Message}", ex.Message);
+                // 3. Build exact Context structure matching first user turn
+                string warmupUserPrompt = PromptContextBuilder.Build(
+                    "hi", 
+                    null, 
+                    null, 
+                    DateTime.UtcNow);
+
+                // 4. Dispatch warm-up inference (pinned with keep_alive: -1)
+                var response = await llmService.GenerateJsonResponseAsync<LlmChatReplyDto>(
+                    systemPrompt,
+                    warmupUserPrompt,
+                    stoppingToken,
+                    ChatReplySchema.Value);
+
+                if (response != null)
+                {
+                    sw.Stop();
+                    _logger.LogInformation(
+                        "✅ [LLM Pre-Warm SUCCESS] Model and System Prompt KV-Cache are HOT in memory ({ElapsedMs}ms, {AssetCount} assets). First user query will be sub-second!", 
+                        sw.ElapsedMilliseconds, assets.Count);
+                    return;
+                }
+
+                _logger.LogWarning("⚠️ [LLM Pre-Warm] LLM returned null reply on attempt {Attempt}/{MaxAttempts}. Retrying...", attempt, maxAttempts);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("⚠️ [LLM Pre-Warm] Attempt {Attempt}/{MaxAttempts} failed ({Message}). Retrying in 4s...", attempt, maxAttempts, ex.Message);
+            }
+
+            await Task.Delay(4000, stoppingToken);
         }
     }
 }
