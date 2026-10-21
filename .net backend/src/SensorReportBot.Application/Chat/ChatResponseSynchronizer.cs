@@ -72,27 +72,27 @@ public static class ChatResponseSynchronizer
         if (asset != null && availableCategories != null && availableCategories.Count > 0)
         {
             var excludeTokens = asset != null ? AssetMatcher.Tokenize(asset.Name) : null;
-            var userCatMatch = !string.IsNullOrWhiteSpace(userMessage)
-                ? CategoryMatcher.Match(userMessage, availableCategories, excludeTokens)
-                : CategoryMatchResult.None;
+            var userCatMatches = !string.IsNullOrWhiteSpace(userMessage)
+                ? CategoryMatcher.MatchMultiple(userMessage, availableCategories, excludeTokens)
+                : Array.Empty<string>();
 
             string? candidateCat;
-            if (assetChanged || (assetSelectedInThisTurn && !userCatMatch.IsMatch))
+            if (assetChanged || (assetSelectedInThisTurn && userCatMatches.Count == 0))
             {
                 // When an asset is newly selected or changed without a category in the message, reset category
-                candidateCat = userCatMatch.IsMatch ? userCatMatch.Category : null;
+                candidateCat = userCatMatches.Count > 0 ? string.Join(", ", userCatMatches) : null;
             }
             else
             {
-                candidateCat = userCatMatch.IsMatch ? userCatMatch.Category : (p.Category ?? prev.Category);
+                candidateCat = userCatMatches.Count > 0 ? string.Join(", ", userCatMatches) : (p.Category ?? prev.Category);
             }
 
             if (!string.IsNullOrWhiteSpace(candidateCat))
             {
-                var match = CategoryMatcher.Match(candidateCat, availableCategories);
-                if (match.IsMatch)
+                var matches = CategoryMatcher.MatchMultiple(candidateCat, availableCategories);
+                if (matches.Count > 0)
                 {
-                    category = match.Category;
+                    category = string.Join(", ", matches);
                 }
             }
         }

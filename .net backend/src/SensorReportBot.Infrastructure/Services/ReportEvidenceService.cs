@@ -54,17 +54,23 @@ public class ReportEvidenceService : IReportEvidenceService
 
         // ── 2. Signals for this asset (all signals if category specified, else top 10) ───
         List<SignalDto> signals;
-        if (!string.IsNullOrWhiteSpace(category))
+        var categoryList = category?
+            .Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+        bool hasCategories = categoryList != null && categoryList.Count > 0 && !categoryList.Any(c => c.Equals("all", StringComparison.OrdinalIgnoreCase) || c.Equals("all categories", StringComparison.OrdinalIgnoreCase));
+
+        if (hasCategories)
         {
+            var lowerCategories = categoryList!.Select(c => c.ToLowerInvariant()).ToArray();
             const string categorySignalSql = @"
                 SELECT s.signal_id AS SignalId, s.asset_id AS AssetId, s.category AS Category, s.name AS Name, s.unit AS Unit, 
                        s.min_value AS MinValue, s.max_value AS MaxValue, 
                        COALESCE(s.critical_min_value, -2) AS CriticalMinValue, 
                        COALESCE(s.critical_max_value, 12) AS CriticalMaxValue 
                 FROM signals s 
-                WHERE s.asset_id = @AssetId AND LOWER(s.category) = LOWER(@Category)
-                ORDER BY s.signal_id ASC;";
-            signals = (await conn.QueryAsync<SignalDto>(categorySignalSql, new { AssetId = selectedAsset.AssetId, Category = category.Trim() })).ToList();
+                WHERE s.asset_id = @AssetId AND LOWER(s.category) = ANY(@Categories)
+                ORDER BY s.category ASC, s.signal_id ASC;";
+            signals = (await conn.QueryAsync<SignalDto>(categorySignalSql, new { AssetId = selectedAsset.AssetId, Categories = lowerCategories })).ToList();
             if (signals.Count == 0)
             {
                 const string fallbackSql = @"

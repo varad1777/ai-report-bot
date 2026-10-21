@@ -65,6 +65,9 @@ function App() {
   // Active AI Model State
   const [modelInfo, setModelInfo] = useState(null);
 
+  // Multi-Category Selection State
+  const [selectedCategorySet, setSelectedCategorySet] = useState(new Set());
+
   const chatEndRef = useRef(null);
   const hubConnectionRef = useRef(null);
 
@@ -747,25 +750,63 @@ function App() {
                           </div>
                         )}
 
-                        {/* Interactive Signal Category Options Shelf */}
+                        {/* Interactive Signal Category Options Shelf (Multi-Category Support) */}
                         {m.sender === 'assistant' && m.isOnTopic && !m.isComplete && m.suggestedAction === 'select_category' && m.suggestedOptions && m.suggestedOptions.length > 0 && (
                           <div className="chat-interactive-shelf">
                             <div className="shelf-label">
                               <Sparkles size={12} />
-                              <span>Select Signal Category for this Asset:</span>
+                              <span>Select One or Multiple Signal Categories:</span>
                             </div>
                             <div className="shelf-chips">
-                              {m.suggestedOptions.map((catName, idx) => (
-                                <button
-                                  key={idx}
-                                  type="button"
-                                  className="interactive-chip category-chip"
-                                  onClick={() => handleSendChat(catName)}
-                                  disabled={isChatLoading}
-                                >
-                                  <Zap size={12} /> {catName}
-                                </button>
-                              ))}
+                              {m.suggestedOptions.map((catName, idx) => {
+                                const isChecked = selectedCategorySet.has(catName);
+                                return (
+                                  <button
+                                    key={idx}
+                                    type="button"
+                                    className={`interactive-chip category-chip ${isChecked ? 'selected' : ''}`}
+                                    onClick={() => {
+                                      setSelectedCategorySet(prev => {
+                                        const next = new Set(prev);
+                                        if (next.has(catName)) next.delete(catName);
+                                        else next.add(catName);
+                                        return next;
+                                      });
+                                    }}
+                                    disabled={isChatLoading}
+                                  >
+                                    {isChecked ? <CheckCircle2 size={12} /> : <Zap size={12} />} {catName}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            <div className="category-selection-toolbar">
+                              <button
+                                type="button"
+                                className="btn-confirm-categories"
+                                disabled={selectedCategorySet.size === 0 || isChatLoading}
+                                onClick={() => {
+                                  if (selectedCategorySet.size > 0) {
+                                    const selectedArr = Array.from(selectedCategorySet);
+                                    handleSendChat(selectedArr.join(", "));
+                                    setSelectedCategorySet(new Set());
+                                  }
+                                }}
+                              >
+                                <CheckCircle2 size={13} /> Confirm {selectedCategorySet.size > 0 ? `${selectedCategorySet.size} ` : ''}Selected
+                              </button>
+                              <button
+                                type="button"
+                                className="btn-all-categories"
+                                disabled={isChatLoading}
+                                onClick={() => {
+                                  handleSendChat("All Categories");
+                                  setSelectedCategorySet(new Set());
+                                }}
+                                title="Analyze all signals across all categories in the report"
+                              >
+                                🌐 All Categories
+                              </button>
                             </div>
                           </div>
                         )}
@@ -883,7 +924,9 @@ function App() {
                                 <div className="param-chip">Asset: <strong>{m.extractedParameters.assetName}</strong></div>
                               )}
                               {m.extractedParameters.category && (
-                                <div className="param-chip category-badge">Category: <strong>{m.extractedParameters.category}</strong></div>
+                                <div className="param-chip category-badge">
+                                  {m.extractedParameters.category.includes(',') ? 'Categories' : 'Category'}: <strong>{m.extractedParameters.category}</strong>
+                                </div>
                               )}
                               {m.extractedParameters.timeRange && (
                                 <div className="param-chip">Time: <strong>{m.extractedParameters.timeRange}</strong></div>

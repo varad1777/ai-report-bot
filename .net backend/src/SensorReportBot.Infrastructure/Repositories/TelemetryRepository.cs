@@ -82,17 +82,31 @@ public class TelemetryRepository : ITelemetryRepository
         }
         else if (!string.IsNullOrWhiteSpace(request.Category))
         {
-            const string sigSql = @"
-                SELECT signal_id AS SignalId, asset_id AS AssetId, category AS Category, name AS Name, unit AS Unit, min_value AS MinValue, max_value AS MaxValue 
-                FROM signals 
-                WHERE asset_id = @AssetId AND LOWER(category) = LOWER(@Category)
-                ORDER BY signal_id;";
-            var sigs = await conn.QueryAsync<SignalDto>(sigSql, new { AssetId = request.AssetId, Category = request.Category.Trim() });
-            targetSignals = sigs.ToList();
-            if (targetSignals.Count == 0)
+            var categoryList = request.Category
+                .Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList();
+            bool hasCategories = categoryList.Count > 0 && !categoryList.Any(c => c.Equals("all", StringComparison.OrdinalIgnoreCase) || c.Equals("all categories", StringComparison.OrdinalIgnoreCase));
+
+            if (hasCategories)
             {
-                var fallback = await GetSignalsByAssetAsync(request.AssetId, ct);
-                targetSignals = fallback.ToList();
+                var lowerCategories = categoryList.Select(c => c.ToLowerInvariant()).ToArray();
+                const string sigSql = @"
+                    SELECT signal_id AS SignalId, asset_id AS AssetId, category AS Category, name AS Name, unit AS Unit, min_value AS MinValue, max_value AS MaxValue 
+                    FROM signals 
+                    WHERE asset_id = @AssetId AND LOWER(category) = ANY(@Categories)
+                    ORDER BY category, signal_id;";
+                var sigs = await conn.QueryAsync<SignalDto>(sigSql, new { AssetId = request.AssetId, Categories = lowerCategories });
+                targetSignals = sigs.ToList();
+                if (targetSignals.Count == 0)
+                {
+                    var fallback = await GetSignalsByAssetAsync(request.AssetId, ct);
+                    targetSignals = fallback.ToList();
+                }
+            }
+            else
+            {
+                var sigs = await GetSignalsByAssetAsync(request.AssetId, ct);
+                targetSignals = sigs.ToList();
             }
         }
         else

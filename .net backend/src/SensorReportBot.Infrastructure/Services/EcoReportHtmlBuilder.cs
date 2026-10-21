@@ -194,6 +194,78 @@ public class EcoReportHtmlBuilder
             ".cover-analysis-period { font-size: 9.5pt; color: #374151; }\n" +
             ".cover-analysis-period strong { font-weight: 700; color: #111827; }\n" +
             "\n" +
+            "/* Cover Scope Card */\n" +
+            ".cover-scope-card {\n" +
+            "  display: inline-flex;\n" +
+            "  flex-direction: column;\n" +
+            "  align-items: center;\n" +
+            "  background: #fbfcfd;\n" +
+            "  border: 1px solid #e2e8f0;\n" +
+            "  border-radius: 8px;\n" +
+            "  padding: 12px 24px 10px 24px;\n" +
+            "  margin: 10px 0 16px 0;\n" +
+            "  max-width: 520px;\n" +
+            "  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);\n" +
+            "}\n" +
+            ".cover-scope-title {\n" +
+            "  font-size: 7.5pt;\n" +
+            "  font-weight: 700;\n" +
+            "  color: #64748b;\n" +
+            "  letter-spacing: 1.2px;\n" +
+            "  text-transform: uppercase;\n" +
+            "  margin-bottom: 8px;\n" +
+            "}\n" +
+            ".cover-category-row {\n" +
+            "  display: flex;\n" +
+            "  justify-content: center;\n" +
+            "  align-items: center;\n" +
+            "  flex-wrap: wrap;\n" +
+            "  gap: 8px;\n" +
+            "  margin-bottom: 8px;\n" +
+            "}\n" +
+            ".cover-cat-pill {\n" +
+            "  display: inline-flex;\n" +
+            "  align-items: center;\n" +
+            "  gap: 6px;\n" +
+            "  font-size: 9.5pt;\n" +
+            "  font-weight: 600;\n" +
+            "  padding: 4px 12px;\n" +
+            "  border-radius: 9999px;\n" +
+            "  border: 1.2px solid transparent;\n" +
+            "  line-height: 1.2;\n" +
+            "}\n" +
+            ".cover-pill-dot {\n" +
+            "  width: 7px;\n" +
+            "  height: 7px;\n" +
+            "  border-radius: 50%;\n" +
+            "  display: inline-block;\n" +
+            "}\n" +
+            ".cover-scope-meta {\n" +
+            "  font-size: 7.5pt;\n" +
+            "  font-weight: 500;\n" +
+            "  color: #475569;\n" +
+            "  letter-spacing: 0.2px;\n" +
+            "}\n" +
+            "\n" +
+            "/* Mini Category Pills for Monitoring / Alerts Headers */\n" +
+            ".mini-cat-pill {\n" +
+            "  display: inline-flex;\n" +
+            "  align-items: center;\n" +
+            "  gap: 4px;\n" +
+            "  font-size: 7pt;\n" +
+            "  font-weight: 600;\n" +
+            "  padding: 2px 8px;\n" +
+            "  border-radius: 9999px;\n" +
+            "  border: 1px solid transparent;\n" +
+            "  line-height: 1.2;\n" +
+            "}\n" +
+            ".mini-pill-dot {\n" +
+            "  width: 5px;\n" +
+            "  height: 5px;\n" +
+            "  border-radius: 50%;\n" +
+            "  display: inline-block;\n" +
+            "}\n" +
+            "\n" +
             "/* Monitoring Page */\n" +
             ".monitoring-title { font-size: 13.5pt; font-weight: 600; color: #222222; margin: 12px 0 16px 0; }\n" +
             ".signal-card {\n" +
@@ -359,7 +431,7 @@ public class EcoReportHtmlBuilder
             "    </svg>\n" +
             $"    <div class=\"cover-plant\">{H(plantName)}</div>\n" +
             "    <div class=\"cover-report-text\">Report</div>\n" +
-            (!string.IsNullOrWhiteSpace(e.SelectedCategory) ? $"    <div style=\"font-size: 13pt; font-weight: 600; color: #111827; margin-bottom: 8px;\">Category: {H(e.SelectedCategory)}</div>\n" : "") +
+            RenderCoverCategoryShelf(e) +
             $"    <div class=\"cover-analysis-period\"><strong>Analysis Period:</strong> {analysisPeriod}</div>\n" +
             "  </div>\n" +
             BuildPageFooter(m.GeneratedAt, pageNum) +
@@ -390,10 +462,7 @@ public class EcoReportHtmlBuilder
         sb.Append("  <div class=\"asset-meta-list\" style=\"margin-bottom:12px;\">\n");
         sb.Append($"    <div><strong>Site:</strong> {H(siteName)}</div>\n");
         sb.Append($"    <div><strong>Asset:</strong> {H(assetName)}</div>\n");
-        if (!string.IsNullOrWhiteSpace(e.SelectedCategory))
-        {
-            sb.Append($"    <div><strong>Category:</strong> {H(e.SelectedCategory)}</div>\n");
-        }
+        sb.Append(RenderMetaCategoryRow(e.SelectedCategory));
         sb.Append("    <div><strong>Monitoring Data:</strong> Health Score</div>\n");
         sb.Append("  </div>\n");
 
@@ -588,10 +657,7 @@ public class EcoReportHtmlBuilder
         sb.Append("  <div class=\"asset-meta-list\">\n");
         sb.Append($"    <div><strong>Site:</strong> {H(siteName)}</div>\n");
         sb.Append($"    <div><strong>Asset:</strong> {H(assetName)}</div>\n");
-        if (!string.IsNullOrWhiteSpace(e.SelectedCategory))
-        {
-            sb.Append($"    <div><strong>Category:</strong> {H(e.SelectedCategory)}</div>\n");
-        }
+        sb.Append(RenderMetaCategoryRow(e.SelectedCategory));
         sb.Append("    <div><strong>Monitoring Data:</strong> Health Score</div>\n");
         sb.Append("  </div>\n");
 
@@ -942,6 +1008,103 @@ public class EcoReportHtmlBuilder
         sb.Append("  <text x=\"238\" y=\"126\" font-size=\"6.8\" font-weight=\"700\" fill=\"#374151\">CRITICAL</text>\n");
 
         sb.Append("</svg>\n");
+        return sb.ToString();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // CATEGORY BADGE & SCOPE HELPERS
+    // ═══════════════════════════════════════════════════════════════════════
+    private record CategoryPalette(string Dot, string Bg, string Border, string Text);
+
+    private static CategoryPalette GetCategoryPalette(string categoryName)
+    {
+        string lower = (categoryName ?? "").ToLowerInvariant();
+        if (lower.Contains("therm") || lower.Contains("wind") || lower.Contains("temp"))
+        {
+            return new CategoryPalette("#ea580c", "#fff7ed", "#fdba74", "#9a3412"); // Flame Orange
+        }
+        if (lower.Contains("bear") || lower.Contains("vib") || lower.Contains("disp") || lower.Contains("acc") || lower.Contains("vel"))
+        {
+            return new CategoryPalette("#0284c7", "#f0f9ff", "#7dd3fc", "#075985"); // Cobalt Blue
+        }
+        if (lower.Contains("electr") || lower.Contains("curr") || lower.Contains("volt") || lower.Contains("power"))
+        {
+            return new CategoryPalette("#16a34a", "#f0fdf4", "#86efac", "#166534"); // Emerald Green
+        }
+        if (lower.Contains("proc") || lower.Contains("flow") || lower.Contains("press") || lower.Contains("mech"))
+        {
+            return new CategoryPalette("#7c3aed", "#f5f3ff", "#c4b5fd", "#5b21b6"); // Deep Violet
+        }
+        if (lower.Contains("all"))
+        {
+            return new CategoryPalette("#00d35a", "#f0fdf4", "#00d35a", "#065f46"); // Schneider Signature Green
+        }
+        return new CategoryPalette("#475569", "#f8fafc", "#cbd5e1", "#1e293b"); // Industrial Slate
+    }
+
+    private static string RenderCoverCategoryShelf(ReportEvidenceDto e)
+    {
+        var rawCategory = e.SelectedCategory;
+        bool isAll = string.IsNullOrWhiteSpace(rawCategory) ||
+                     rawCategory.Equals("all", StringComparison.OrdinalIgnoreCase) ||
+                     rawCategory.Equals("all categories", StringComparison.OrdinalIgnoreCase);
+
+        var categories = !isAll && !string.IsNullOrWhiteSpace(rawCategory)
+            ? rawCategory.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            : new[] { "All Subsystems" };
+
+        var sb = new StringBuilder();
+        sb.Append("    <div class=\"cover-scope-card\">\n");
+        sb.Append("      <div class=\"cover-scope-title\">MONITORED SUBSYSTEMS &amp; SCOPE</div>\n");
+        sb.Append("      <div class=\"cover-category-row\">\n");
+
+        foreach (var cat in categories)
+        {
+            var p = GetCategoryPalette(cat);
+            sb.Append($"        <span class=\"cover-cat-pill\" style=\"background:{p.Bg}; border-color:{p.Border}; color:{p.Text};\">\n");
+            sb.Append($"          <span class=\"cover-pill-dot\" style=\"background:{p.Dot};\"></span>\n");
+            sb.Append($"          {H(cat)}\n");
+            sb.Append("        </span>\n");
+        }
+
+        sb.Append("      </div>\n");
+
+        int sigCount = e.Signals?.Count ?? 0;
+        int excCount = e.TotalExcursions;
+        string metaDesc = isAll
+            ? $"Comprehensive Machine Audit &bull; {sigCount} Monitored Signals &bull; {excCount} Excursions"
+            : categories.Length > 1
+                ? $"{categories.Length} Subsystems Scoped &bull; {sigCount} Monitored Signals &bull; {excCount} Excursions"
+                : $"Targeted Subsystem Audit &bull; {sigCount} Monitored Signals &bull; {excCount} Excursions";
+
+        sb.Append($"      <div class=\"cover-scope-meta\">{metaDesc}</div>\n");
+        sb.Append("    </div>\n");
+
+        return sb.ToString();
+    }
+
+    private static string RenderMetaCategoryRow(string? rawCategory)
+    {
+        if (string.IsNullOrWhiteSpace(rawCategory)) return "";
+
+        var categories = rawCategory.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (categories.Length == 0) return "";
+
+        string label = categories.Length > 1 ? "Categories" : "Category";
+        var sb = new StringBuilder();
+        sb.Append("    <div style=\"display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin:2px 0;\">\n");
+        sb.Append($"      <strong>{label}:</strong>\n");
+
+        foreach (var cat in categories)
+        {
+            var p = GetCategoryPalette(cat);
+            sb.Append($"      <span class=\"mini-cat-pill\" style=\"background:{p.Bg}; border-color:{p.Border}; color:{p.Text};\">\n");
+            sb.Append($"        <span class=\"mini-pill-dot\" style=\"background:{p.Dot};\"></span>\n");
+            sb.Append($"        {H(cat)}\n");
+            sb.Append("      </span>\n");
+        }
+
+        sb.Append("    </div>\n");
         return sb.ToString();
     }
 

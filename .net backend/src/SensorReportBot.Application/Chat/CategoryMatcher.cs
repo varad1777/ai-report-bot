@@ -27,6 +27,87 @@ public static class CategoryMatcher
         "sensor", "sensors", "data", "signals", "signal", "select", "choose"
     };
 
+    /// <summary>
+    /// Matches one or more categories from the user's message.
+    /// Handles multiple categories joined by commas, 'and', '&', as well as 'all categories'.
+    /// </summary>
+    public static IReadOnlyList<string> MatchMultiple(
+        string? message,
+        IReadOnlyList<string> availableCategories,
+        IEnumerable<string>? excludeTokens = null)
+    {
+        if (string.IsNullOrWhiteSpace(message) || availableCategories == null || availableCategories.Count == 0)
+            return Array.Empty<string>();
+
+        string cleanMsg = message.Trim();
+        string lowerMsg = cleanMsg.ToLowerInvariant();
+
+        // 0. Shortcut for "all" / "all categories" / "all signals"
+        if (lowerMsg == "all" || lowerMsg == "all categories" || lowerMsg == "all signals" || lowerMsg == "every category")
+        {
+            return availableCategories.ToList();
+        }
+
+        var matched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // 1. Direct full category substring matches (longest names first to avoid partial overlap)
+        foreach (var cat in availableCategories.OrderByDescending(c => c.Length))
+        {
+            if (cleanMsg.Contains(cat, StringComparison.OrdinalIgnoreCase))
+            {
+                matched.Add(cat);
+            }
+        }
+
+        // 2. Comma or semicolon separated list (e.g. from UI multi-select or typed list)
+        if (cleanMsg.Contains(',') || cleanMsg.Contains(';'))
+        {
+            var parts = cleanMsg.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            foreach (var part in parts)
+            {
+                var res = Match(part, availableCategories, excludeTokens);
+                if (res.IsMatch && res.Category != null)
+                {
+                    matched.Add(res.Category);
+                }
+            }
+        }
+
+        // 3. Conjunction-based splitting (" and ", " & ")
+        if (matched.Count < 2 && (cleanMsg.Contains(" and ", StringComparison.OrdinalIgnoreCase) || cleanMsg.Contains(" & ")))
+        {
+            var segments = Regex.Split(cleanMsg, @"\s+(?:and|\&)\s+", RegexOptions.IgnoreCase);
+            if (segments.Length > 1)
+            {
+                foreach (var seg in segments)
+                {
+                    var segTrimmed = seg.Trim();
+                    if (!string.IsNullOrWhiteSpace(segTrimmed))
+                    {
+                        var res = Match(segTrimmed, availableCategories, excludeTokens);
+                        if (res.IsMatch && res.Category != null)
+                        {
+                            matched.Add(res.Category);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. Fallback to single category match if nothing collected yet
+        if (matched.Count == 0)
+        {
+            var single = Match(cleanMsg, availableCategories, excludeTokens);
+            if (single.IsMatch && single.Category != null)
+            {
+                matched.Add(single.Category);
+            }
+        }
+
+        // Preserve catalog order for consistency
+        return availableCategories.Where(c => matched.Contains(c)).ToList();
+    }
+
     public static CategoryMatchResult Match(
         string? message,
         IReadOnlyList<string> availableCategories,

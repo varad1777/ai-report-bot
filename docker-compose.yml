@@ -90,18 +90,7 @@ services:
       SAMPLE_MINUTES: "1"
       MONTHS: "1"
 
-  # ---------------- JEV (Laya) Decision Model Image ----------------
-  jev-model:
-    build:
-      context: ./models
-      dockerfile: Dockerfile
-    image: jev-model:latest
-    container_name: sensorbot_jev_model
-    restart: unless-stopped
-    volumes:
-      - jev_model_data:/app/models/laya-multilingual/multilingual
-
-  # ---------------- .NET 9 Backend Web API (Hosts Native In-Process .NET Decision Engine) ----------------
+  # ---------------- .NET 9 Backend Web API ----------------
   backend:
     build:
       context: ./.net backend
@@ -115,17 +104,12 @@ services:
         condition: service_healthy
       ollama:
         condition: service_healthy
-      jev-model:
-        condition: service_started
-    volumes:
-      - jev_model_data:/app/models/laya-multilingual/multilingual:ro
     environment:
       ConnectionStrings__TimescaleDb: "Host=timescaledb;Port=5432;Database=iam_db;Username=iam_user;Password=iam_pass"
       Llm__Endpoint: "http://ollama:11434/v1"
       Llm__Model: *ai_model
       Llm__TimeoutSeconds: "300"
-      Laya__Enabled: "true"
-      Laya__ModelDirectory: "/app/models/laya-multilingual/multilingual"
+      Laya__Enabled: "false"
       ASPNETCORE_URLS: "http://0.0.0.0:5500"
       Cors__AllowedOrigins__0: "http://localhost:5173"
       Cors__AllowedOrigins__1: "http://localhost:5174"
@@ -155,6 +139,4 @@ volumes:
   ollama_data:
     driver: local
   pgdata:
-    driver: local
-  jev_model_data:
     driver: local

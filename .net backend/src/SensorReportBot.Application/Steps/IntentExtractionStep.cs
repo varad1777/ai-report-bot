@@ -213,10 +213,10 @@ public class IntentExtractionStep : IChatStep
         string? matchedCategory = null;
         if (availableCategories.Count > 0)
         {
-            var catMatch = CategoryMatcher.Match(userMsg, availableCategories, excludeTokens);
-            if (catMatch.IsMatch)
+            var catMatches = CategoryMatcher.MatchMultiple(userMsg, availableCategories, excludeTokens);
+            if (catMatches.Count > 0)
             {
-                matchedCategory = catMatch.Category;
+                matchedCategory = string.Join(", ", catMatches);
             }
         }
 
